@@ -147,6 +147,9 @@
   .lembar-latar { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
   .lembar { background: var(--surface); width: 100%; max-width: 720px; border-radius: 18px 18px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); }
   .lembar .tombol { width: 100%; margin-top: 8px; justify-content: flex-start; }
+  .pembaruan { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--warn-soft); color: var(--warn-text);
+    padding: 8px 14px; font-size: 14px; max-width: 720px; margin: 0 auto; }
+  .pembaruan .tombol { text-decoration: none; color: var(--text); flex: none; }
   .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--nav-h) + 16px + env(safe-area-inset-bottom, 0px)); z-index: 50;
     background: #101820; color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100% - 32px); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
   .putar { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: putar .8s linear infinite; display: inline-block; vertical-align: -3px; }

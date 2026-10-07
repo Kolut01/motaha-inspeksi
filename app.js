@@ -6,13 +6,17 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-07.13';
+var VERSI_PWA = '2026-10-07.15';
+var VERSI_SERVER_MIN = '2026-10-07.13'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP
+// Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
+// pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
+var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 var KUNCI = { api: 'motaha-api', sesi: 'motaha-sesi', data: 'motaha-data', tema: 'motaha-tema' };
 
 var S = {
   api: '', sesi: null, data: null, antrean: [], tab: 'input', draf: null, detail: null, eks: null,
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
-  cari: '', saringPy: '', terakhirKirim: null
+  cari: '', saringPy: '', terakhirKirim: null, pembaruan: null
 };
 
 /* ---------- Util ---------- */
@@ -107,7 +111,7 @@ async function api(aksi, muatan) {
     j = await panggil(aksi, Object.assign({}, muatan, { token: S.sesi.token }));
   }
   if (!j.ok) {
-    if (/^Unknown action/.test(j.error || '')) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_PWA + '. Hubungi admin.', 'VERSI');
+    if (/^Unknown action/.test(j.error || '')) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN + '. Hubungi admin.', 'VERSI');
     throw galat(j.error || 'Permintaan ditolak server.', j.kode || 'DITOLAK');
   }
   return j;
@@ -116,7 +120,7 @@ async function api(aksi, muatan) {
 async function perbaruiSesi() {
   var j = await panggil('masukPerangkat', { kunciPerangkat: S.sesi.kunci });
   if (!j.ok) {
-    if (/^Unknown action/.test(j.error || '')) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_PWA + '. Hubungi admin.', 'VERSI');
+    if (/^Unknown action/.test(j.error || '')) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN + '. Hubungi admin.', 'VERSI');
     S.sesi.habis = true; tulisLokal(KUNCI.sesi, S.sesi);
     throw galat(j.error || 'Silakan masuk lagi.', 'MASUK');
   }
@@ -175,28 +179,100 @@ async function kirimAntrean() {
 }
 
 /* ---------- Foto ---------- */
-function siapkanFoto(berkas) {
-  return new Promise(function (selesai, gagal) {
-    if (!berkas || !/^image\//.test(berkas.type)) { gagal(new Error('Berkas harus berupa gambar.')); return; }
-    var pembaca = new FileReader();
-    pembaca.onload = function () {
-      var koordinat = koordinatDariExif(pembaca.result);
-      var url = URL.createObjectURL(berkas), img = new Image();
-      img.onload = function () {
-        var maks = 1600, s = Math.min(1, maks / Math.max(img.naturalWidth, img.naturalHeight));
-        var c = document.createElement('canvas');
-        c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        URL.revokeObjectURL(url);
-        var data = c.toDataURL('image/jpeg', 0.8);
-        selesai({ mime: 'image/jpeg', data: data, koordinat: koordinat, kb: Math.round(data.length * 0.75 / 1024) });
-      };
-      img.onerror = function () { URL.revokeObjectURL(url); gagal(new Error('Gambar tidak bisa dibaca.')); };
-      img.src = url;
-    };
-    pembaca.onerror = function () { gagal(new Error('Berkas tidak bisa dibaca.')); };
-    pembaca.readAsArrayBuffer(berkas);
+/* ---------- Foto + cap waktu & koordinat ----------
+ * Setiap foto diberi cap di pojok kiri bawah: waktu foto diambil, titik koordinat, dan nama aplikasi.
+ * - Waktu: dari EXIF kamera (DateTimeOriginal) bila ada, kalau tidak = saat foto dipilih.
+ * - Koordinat: dari GPS di EXIF foto bila ada; kalau tidak, dari GPS HP saat itu — hanya bila foto baru
+ *   diambil (≤ 10 menit), supaya foto lama dari galeri tidak diberi lokasi tempat petugas berdiri sekarang.
+ */
+var NAMA_BULAN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+function zonaWaktu(d) {
+  var m = -d.getTimezoneOffset();
+  return { 420: 'WIB', 480: 'WITA', 540: 'WIT' }[m] || ('GMT' + (m >= 0 ? '+' : '-') + Math.floor(Math.abs(m) / 60));
+}
+function teksCapWaktu(d) {
+  var dua = function (n) { return (n < 10 ? '0' : '') + n; };
+  return dua(d.getDate()) + ' ' + NAMA_BULAN[d.getMonth()] + ' ' + d.getFullYear() + '  ' +
+    dua(d.getHours()) + '.' + dua(d.getMinutes()) + '.' + dua(d.getSeconds()) + ' ' + zonaWaktu(d);
+}
+
+function lokasiHp(batasMs) {
+  return new Promise(function (ok) {
+    if (!navigator.geolocation) { ok(null); return; }
+    var selesai = false, akhiri = function (x) { if (!selesai) { selesai = true; ok(x); } };
+    setTimeout(function () { akhiri(null); }, batasMs);
+    navigator.geolocation.getCurrentPosition(function (p) {
+      akhiri({ koordinat: p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6), akurasi: Math.round(p.coords.accuracy) });
+    }, function () { akhiri(null); }, { enableHighAccuracy: true, timeout: batasMs, maximumAge: 60000 });
   });
+}
+
+function bacaBerkas(berkas) {
+  return new Promise(function (ok, gagal) {
+    var r = new FileReader();
+    r.onload = function () { ok(r.result); };
+    r.onerror = function () { gagal(new Error('Berkas tidak bisa dibaca.')); };
+    r.readAsArrayBuffer(berkas);
+  });
+}
+function muatGambar(berkas) {
+  return new Promise(function (ok, gagal) {
+    var url = URL.createObjectURL(berkas), img = new Image();
+    img.onload = function () { URL.revokeObjectURL(url); ok(img); };
+    img.onerror = function () { URL.revokeObjectURL(url); gagal(new Error('Gambar tidak bisa dibaca.')); };
+    img.src = url;
+  });
+}
+
+function gambarCap(c, baris) {
+  var ctx = c.getContext('2d');
+  var uk = Math.max(15, Math.round(Math.min(c.width, c.height) * 0.032));
+  var pad = Math.round(uk * 0.7), jarak = Math.round(uk * 1.32);
+  ctx.font = '600 ' + uk + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  ctx.textBaseline = 'top';
+  var lebar = 0; baris.forEach(function (b) { lebar = Math.max(lebar, ctx.measureText(b.teks).width); });
+  var w = Math.ceil(lebar + pad * 2 + uk * 0.4), h = jarak * baris.length + pad * 2 - (jarak - uk);
+  var x = pad, y = c.height - h - pad;
+  ctx.fillStyle = 'rgba(11, 46, 74, 0.72)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, Math.round(uk * 0.45)); else ctx.rect(x, y, w, h);
+  ctx.fill();
+  ctx.fillStyle = '#F5C518'; ctx.fillRect(x, y, Math.max(3, Math.round(uk * 0.22)), h); // garis kuning khas MOTAHA
+  baris.forEach(function (b, i) {
+    ctx.font = (b.tebal ? '700 ' : '500 ') + uk + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = b.warna || '#FFFFFF';
+    ctx.fillText(b.teks, x + pad + uk * 0.2, y + pad + i * jarak);
+  });
+}
+
+async function siapkanFoto(berkas) {
+  if (!berkas || !/^image\//.test(berkas.type)) throw new Error('Berkas harus berupa gambar.');
+  var dipilih = new Date();
+  var mintaLokasi = lokasiHp(12000); // jalan bersamaan dengan membaca foto
+  var buf = await bacaBerkas(berkas);
+  var koorExif = koordinatDariExif(buf), waktuExif = waktuDariExif(buf);
+  var waktu = waktuExif ? new Date(waktuExif) : dipilih;
+  if (isNaN(waktu)) waktu = dipilih;
+  var baru = !waktuExif || Math.abs(dipilih - waktu) <= 10 * 60000;
+  var koordinat = koorExif, akurasi = null, sumber = koorExif ? 'foto' : '';
+  if (!koordinat && baru) {
+    toast('Mengambil lokasi untuk cap foto…');
+    var l = await mintaLokasi;
+    if (l) { koordinat = l.koordinat; akurasi = l.akurasi; sumber = 'hp'; }
+  }
+  var img = await muatGambar(berkas);
+  var maks = 1600, s = Math.min(1, maks / Math.max(img.naturalWidth, img.naturalHeight));
+  var c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  gambarCap(c, [
+    { teks: teksCapWaktu(waktu), tebal: true },
+    { teks: koordinat ? koordinat + (akurasi !== null ? '  ±' + akurasi + ' m' : '') : 'Koordinat tidak tersedia', warna: koordinat ? '#FFFFFF' : '#F2C76A' },
+    { teks: 'MOTAHA Inspeksi · ULP Kolaka Utara', warna: '#B9CCDD' }
+  ]);
+  var data = c.toDataURL('image/jpeg', 0.82);
+  return { mime: 'image/jpeg', data: data, koordinat: koordinat, sumberKoordinat: sumber, waktu: waktu.toISOString(),
+    kb: Math.round(data.length * 0.75 / 1024) };
 }
 
 function htmlFoto(id, label, wajib, ada) {
@@ -204,7 +280,7 @@ function htmlFoto(id, label, wajib, ada) {
     '<label class="unggah" for="' + id + '"><input id="' + id + '" type="file" accept="image/*" capture="environment">' +
     (ada ? '<img src="' + ada.data + '" alt="' + esc(label) + '">' :
       '<span class="kosong">' + IKON.kamera + '<b>Ambil / pilih foto</b><small class="catatan">Kamera atau galeri</small></span>') + '</label>' +
-    (ada ? '<p class="catatan">Foto siap (' + ada.kb + ' KB). Ketuk foto untuk mengganti.</p>' : '') + '</div>';
+    (ada ? '<p class="catatan">Foto siap (' + ada.kb + ' KB), sudah diberi cap waktu' + (ada.koordinat ? ' &amp; koordinat' : '') + '. Ketuk foto untuk mengganti.</p>' : '') + '</div>';
 }
 
 function pasangFoto(id, saatSiap) {
@@ -212,7 +288,7 @@ function pasangFoto(id, saatSiap) {
   inp.onchange = function () {
     var berkas = inp.files && inp.files[0]; if (!berkas) return;
     toast('Memproses foto…');
-    siapkanFoto(berkas).then(saatSiap).catch(function (e) { toast(e.message); });
+    siapkanFoto(berkas).then(saatSiap).catch(function (e) { toast(e.message); }).then(function () { inp.value = ''; });
   };
 }
 
@@ -252,6 +328,8 @@ function gambar() {
     '<div class="kepala-judul"><b>MOTAHA Inspeksi</b><small>' + info + '</small></div>' +
     '<span class="jaringan' + (navigator.onLine ? '' : ' mati') + '">' + (navigator.onLine ? 'Online' : 'Offline') + '</span>' +
     '<button class="tombol-ikon" id="buka-menu" aria-label="Menu akun">' + IKON.menu + '</button></div></header>' +
+    (S.pembaruan ? '<div class="pembaruan" role="status"><span>Versi baru <b>' + esc(S.pembaruan.versi) + '</b> tersedia.</span>' +
+      '<a class="tombol tombol-kecil" href="' + esc(S.pembaruan.url) + '">Unduh</a></div>' : '') +
     '<main id="isi"></main>' +
     '<nav class="nav" aria-label="Menu utama"><div class="nav-isi">' +
     tombolNav('input', 'Input temuan', IKON.input, 0) + tombolNav('tl', 'Tindak lanjut', IKON.tl, 0) +
@@ -282,9 +360,10 @@ function htmlMenu() {
   var py = S.sesi.pengguna || {};
   var dataInfo = S.data ? 'Data form: ' + jamTampil(S.data.diambil) : 'Data form belum ada';
   return '<div class="lembar-latar" id="latar"><div class="lembar" role="dialog" aria-label="Menu akun">' +
-    '<b>' + esc(py.nama || py.username) + '</b><p class="catatan">' + esc(py.username) + ' · ' + esc(dataInfo) + ' · versi ' + VERSI_PWA + '</p>' +
+    '<b>' + esc(py.nama || py.username) + '</b><p class="catatan">' + esc(py.username) + ' · ' + esc(dataInfo) + ' · versi ' + VERSI_PWA + (DI_APK ? ' (APK)' : '') + '</p>' +
     '<button class="tombol" id="m-data">Perbarui daftar penyulang &amp; temuan</button>' +
     (S.pasang ? '<button class="tombol" id="m-pasang">Pasang aplikasi di layar utama</button>' : '') +
+    (DI_APK ? '<button class="tombol" id="m-cek">Cek pembaruan aplikasi</button>' : '') +
     '<button class="tombol" id="m-tema">Tema: ' + ({ light: 'Terang', dark: 'Gelap' }[bacaLokal(KUNCI.tema)] || 'Ikuti HP') + '</button>' +
     '<button class="tombol tombol-bahaya" id="m-keluar">Keluar</button>' +
     '<button class="tombol" id="m-tutup">Tutup</button></div></div>';
@@ -294,6 +373,7 @@ function pasangMenu() {
   var tutup = function () { S.lembar = false; gambar(); };
   $('#latar').onclick = function (e) { if (e.target.id === 'latar') tutup(); };
   $('#m-tutup').onclick = tutup;
+  if ($('#m-cek')) $('#m-cek').onclick = function () { S.lembar = false; gambar(); cekPembaruan(true); };
   $('#m-data').onclick = function () { S.lembar = false; if (!navigator.onLine) { toast('Sedang offline.'); gambar(); return; } muatData(); };
   if ($('#m-pasang')) $('#m-pasang').onclick = function () { S.pasang.prompt(); S.pasang = null; tutup(); };
   $('#m-tema').onclick = function () {
@@ -360,7 +440,7 @@ function pasangMasuk() {
       var j = await panggil('login', { username: $('#u').value.trim(), password: $('#p').value, perangkat: true });
       if (!j.ok) throw galat(j.error || 'Gagal masuk.');
       if (j.pengguna && j.pengguna.wajibGanti) throw galat('Akun ini wajib mengganti password dulu. Buka dashboard MOTAHA, ganti password, lalu masuk lagi di sini.');
-      if (!j.kunciPerangkat) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_PWA + '. Hubungi admin.');
+      if (!j.kunciPerangkat) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN + '. Hubungi admin.');
       S.sesi = { token: j.token, kunci: j.kunciPerangkat, pengguna: j.pengguna };
       tulisLokal(KUNCI.sesi, S.sesi); S.pesan = null;
       if (S.draf && !S.draf.petugasInspeksi) S.draf.petugasInspeksi = j.pengguna.nama || '';
@@ -464,7 +544,8 @@ function pasangInput() {
   Array.prototype.forEach.call(document.querySelectorAll('input[name="i-status"]'), function (el) { el.onchange = ulang; });
   pasangFoto('i-foto', function (foto) {
     ambilIsian(); f.fotoTemuan = foto;
-    if (foto.koordinat && !f.koordinat) { f.koordinat = foto.koordinat; toast('Koordinat diisi dari lokasi foto.'); }
+    if (foto.koordinat && !f.koordinat) { f.koordinat = foto.koordinat; toast(foto.sumberKoordinat === 'foto' ? 'Koordinat diisi dari lokasi foto.' : 'Koordinat diisi dari GPS HP.'); }
+    else if (!foto.koordinat) toast('Foto siap. Koordinat belum didapat — isi lewat Lokasi saya.');
     else toast('Foto siap (' + foto.kb + ' KB).');
     simpanDraf(); gambar();
   });
@@ -650,6 +731,35 @@ function gambarAntrean(isi) {
   });
 }
 
+/* ---------- Pembaruan APK (rilis GitHub) ---------- */
+/** '2026-10-07.14' -> 2026100714 (sama dengan versionCode APK). */
+function kodeVersi(v) {
+  var m = /^v?(\d{4})-(\d{2})-(\d{2})\.(\d+)$/.exec(String(v || ''));
+  return m ? (+(m[1] + m[2] + m[3])) * 100 + (+m[4]) : 0;
+}
+
+async function cekPembaruan(manual) {
+  var repo = String(window.MOTAHA_REPO || '');
+  if (!DI_APK || !/^[\w.-]+\/[\w.-]+$/.test(repo) || !navigator.onLine) { if (manual) toast(navigator.onLine ? 'Pemeriksaan pembaruan tidak tersedia.' : 'Sedang offline.'); return; }
+  var simpan = bacaLokal('motaha-rilis');
+  if (!manual && simpan && Date.now() - simpan.waktu < 6 * 3600000) { terapkanRilis(simpan.tag, repo); return; }
+  try {
+    var r = await fetch('https://api.github.com/repos/' + repo + '/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var j = await r.json();
+    tulisLokal('motaha-rilis', { tag: j.tag_name, waktu: Date.now() });
+    terapkanRilis(j.tag_name, repo);
+    if (manual) toast(S.pembaruan ? 'Versi baru ' + S.pembaruan.versi + ' tersedia.' : 'Aplikasi sudah versi terbaru (' + VERSI_PWA + ').');
+  } catch (e) { if (manual) toast('Gagal memeriksa pembaruan.'); }
+}
+
+function terapkanRilis(tag, repo) {
+  var baru = kodeVersi(tag) > kodeVersi(VERSI_PWA);
+  var bagian = repo.split('/');
+  S.pembaruan = baru ? { versi: String(tag).replace(/^v/, ''), url: 'https://' + bagian[0].toLowerCase() + '.github.io/' + bagian[1] + '/unduh/' } : null;
+  gambar();
+}
+
 /* ---------- Mulai ---------- */
 async function mulai() {
   terapkanTema();
@@ -662,6 +772,7 @@ async function mulai() {
   await muatAntrean();
   gambar();
   if (S.sesi && !S.sesi.habis && navigator.onLine) { muatData(!!S.data); kirimAntrean(); }
+  cekPembaruan(false);
 
   window.addEventListener('online', function () { gambar(); muatData(true); kirimAntrean(); });
   window.addEventListener('offline', function () { gambar(); });
@@ -672,7 +783,10 @@ async function mulai() {
   setInterval(function () { if (document.visibilityState === 'visible') kirimAntrean(); }, 60000);
   window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); S.pasang = e; });
 
-  if ('serviceWorker' in navigator) {
+  if (DI_APK && 'serviceWorker' in navigator) {
+    // Di APK berkas sudah lokal; lepas service worker (bila ada) agar tidak menyajikan berkas versi lama.
+    navigator.serviceWorker.getRegistrations().then(function (r) { r.forEach(function (x) { x.unregister(); }); }).catch(function () {});
+  } else if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').then(function (reg) {
       reg.addEventListener('updatefound', function () {
         var baru = reg.installing;
