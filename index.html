@@ -131,6 +131,14 @@
   .tag-tunggu { background: var(--warn-soft); color: var(--warn-text); border-color: transparent; }
   .tag-tolak { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
   .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .segmen { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; }
+  .segmen button { min-height: 42px; border: 0; border-radius: 9px; background: none; font-weight: 700; color: var(--text-2); }
+  .segmen button b { display: inline-block; min-width: 22px; padding: 0 6px; margin-left: 4px; border-radius: 99px; background: var(--line); font-size: 12px; line-height: 20px; }
+  .segmen button[aria-selected="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
+  .segmen button[aria-selected="true"] b { background: var(--accent-soft); }
+  .foto-server { width: 100%; border-radius: 12px; display: block; }
+  dl.rinci + .medan { margin-top: 16px; }
+  input[readonly] { background: var(--surface-2); color: var(--text-2); }
   .kosong-daftar { text-align: center; color: var(--muted); padding: 32px 12px; }
   dl.rinci { display: grid; grid-template-columns: 9.5em 1fr; gap: 6px 10px; margin: 0; font-size: 14px; }
   dl.rinci dt { color: var(--muted); }

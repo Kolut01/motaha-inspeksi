@@ -6,7 +6,7 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-07.15';
+var VERSI_PWA = '2026-10-07.16';
 var VERSI_SERVER_MIN = '2026-10-07.13'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
@@ -16,7 +16,7 @@ var KUNCI = { api: 'motaha-api', sesi: 'motaha-sesi', data: 'motaha-data', tema:
 var S = {
   api: '', sesi: null, data: null, antrean: [], tab: 'input', draf: null, detail: null, eks: null,
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
-  cari: '', saringPy: '', terakhirKirim: null, pembaruan: null
+  cari: '', saringPy: '', terakhirKirim: null, pembaruan: null, tlMode: 'belum', foto: {}
 };
 
 /* ---------- Util ---------- */
@@ -455,12 +455,15 @@ function pasangMasuk() {
 }
 
 /* ---------- Form input temuan ---------- */
+/** Petugas eksekusi selalu = nama akun yang sedang masuk. */
+function namaLogin() { var p = (S.sesi && S.sesi.pengguna) || {}; return p.nama || p.username || ''; }
+
 function drafBaru(lama) {
   var py = (S.sesi && S.sesi.pengguna) || {};
   return {
     tanggal: hariIni(), penyulang: lama ? lama.penyulang : '', section: '', sectionManual: false,
     jenis: '', rencana: '', material: '', koordinat: '', keterangan: '', status: '',
-    petugasInspeksi: lama ? lama.petugasInspeksi : (py.nama || ''), petugasEksekusi: '', tanggalEksekusi: hariIni(),
+    petugasInspeksi: lama ? lama.petugasInspeksi : (py.nama || ''), petugasEksekusi: namaLogin(), tanggalEksekusi: hariIni(),
     fotoTemuan: null, fotoEksekusi: null
   };
 }
@@ -483,7 +486,7 @@ function ambilIsian() {
   f.section = f.sectionManual ? (nilai('i-sec-lain') || '') : sec;
   f.jenis = radio('i-jenis'); f.rencana = radio('i-rencana'); f.material = radio('i-material'); f.status = radio('i-status');
   f.koordinat = nilai('i-koor') || ''; f.keterangan = nilai('i-ket') || ''; f.petugasInspeksi = nilai('i-pi') || '';
-  if (document.getElementById('i-pe')) { f.petugasEksekusi = nilai('i-pe'); f.tanggalEksekusi = nilai('i-tgl-eks'); }
+  if (document.getElementById('i-pe')) { f.petugasEksekusi = namaLogin(); f.tanggalEksekusi = nilai('i-tgl-eks'); }
   return f;
 }
 
@@ -523,7 +526,7 @@ function gambarInput(isi) {
     '<div class="medan"><span class="label">Status temuan <span class="wajib">*</span></span>' + radio('i-status', p.status, f.status || p.status[0]) + '</div>' +
     (sudah ? '<div class="blok-eksekusi"><p class="catatan" style="margin-bottom:10px"><b>Sudah eksekusi:</b> foto setelah eksekusi dan petugas eksekusi wajib diisi.</p>' +
       htmlFoto('i-foto2', 'Foto setelah eksekusi', true, f.fotoEksekusi) +
-      '<div class="medan"><label for="i-pe">Nama petugas eksekusi <span class="wajib">*</span></label><input id="i-pe" type="text" value="' + esc(f.petugasEksekusi) + '"></div>' +
+      htmlPetugasEksekusi('i-pe') +
       '<div class="medan"><label for="i-tgl-eks">Tanggal eksekusi</label><input id="i-tgl-eks" type="date" max="' + hariIni() + '" value="' + esc(f.tanggalEksekusi || hariIni()) + '"></div></div>' : '') +
     '<button class="tombol-utama" type="submit">' + (S.gantiAntre ? 'Simpan perbaikan' : 'Simpan temuan') + '</button>' +
     (S.gantiAntre ? '<button class="tombol" type="button" id="i-batal" style="width:100%;margin-top:8px">Batal</button>' : '') +
@@ -567,7 +570,7 @@ function pasangInput() {
       !f.jenis ? 'Pilih jenis temuan.' : !f.rencana ? 'Pilih rencana tindak lanjut.' : !f.material ? 'Pilih kebutuhan material.' :
       !f.fotoTemuan ? 'Foto temuan wajib dilampirkan.' : f.koordinat && !koordinatSah(f.koordinat) ? 'Titik koordinat tidak sah (contoh: -3.123456, 121.123456).' :
       !f.petugasInspeksi ? 'Nama petugas inspeksi wajib diisi.' : !f.status ? 'Pilih status temuan.' :
-      sudah && !f.fotoEksekusi ? 'Foto setelah eksekusi wajib dilampirkan.' : sudah && !f.petugasEksekusi ? 'Nama petugas eksekusi wajib diisi.' :
+      sudah && !f.fotoEksekusi ? 'Foto setelah eksekusi wajib dilampirkan.' : sudah && !namaLogin() ? 'Nama akun tidak terbaca — keluar lalu masuk lagi.' :
       sudah && f.tanggalEksekusi && f.tanggalEksekusi < f.tanggal ? 'Tanggal eksekusi tidak boleh sebelum tanggal inspeksi.' : '';
     if (salah) { S.pesan = { jenis: 'galat', teks: salah }; gambar(); window.scrollTo(0, 0); return; }
     var lama = S.gantiAntre && S.antrean.filter(function (x) { return x.idAntre === S.gantiAntre; })[0];
@@ -580,7 +583,7 @@ function pasangInput() {
         koordinat: f.koordinat, keterangan: f.keterangan, status: f.status, petugasInspeksi: f.petugasInspeksi,
         fotoTemuan: { mime: f.fotoTemuan.mime, data: f.fotoTemuan.data },
         fotoEksekusi: sudah ? { mime: f.fotoEksekusi.mime, data: f.fotoEksekusi.data } : null,
-        petugasEksekusi: sudah ? f.petugasEksekusi : '', tanggalEksekusi: sudah ? (f.tanggalEksekusi || hariIni()) : ''
+        petugasEksekusi: sudah ? namaLogin() : '', tanggalEksekusi: sudah ? (f.tanggalEksekusi || hariIni()) : ''
       }
     };
     try {
@@ -611,33 +614,44 @@ function daftarTemuan() {
 
 function eksekusiTertunda(id) { return S.antrean.filter(function (x) { return x.aksi === 'eksekusiInspeksi' && x.muatan.id === id; })[0]; }
 
+function htmlPetugasEksekusi(id) {
+  return '<div class="medan"><label for="' + id + '">Nama petugas eksekusi</label><input id="' + id + '" type="text" value="' + esc(namaLogin()) + '" readonly aria-readonly="true">' +
+    '<p class="catatan">Otomatis sesuai akun yang masuk.</p></div>';
+}
+
+function cocokCari(x) {
+  if (S.saringPy && x['PENYULANG'] !== S.saringPy) return false;
+  var q = S.cari.toUpperCase();
+  if (!q) return true;
+  return [x.ID, x['PENYULANG'], x['SECTION/SEGMEN'], x['KETERANGAN'], x['JENIS TEMUAN'], x['PETUGAS INSPEKSI'], x['PETUGAS EKSEKUSI']]
+    .join(' ').toUpperCase().indexOf(q) !== -1;
+}
+
 function gambarTindakLanjut(isi) {
   if (S.detail) { gambarDetail(isi); return; }
-  var semua = daftarTemuan();
+  var selesaiMode = S.tlMode === 'selesai';
+  var belum = daftarTemuan(), selesai = S.data.selesai || [];
+  var semua = selesaiMode ? selesai : belum;
   var py = {}; semua.forEach(function (x) { py[x['PENYULANG']] = (py[x['PENYULANG']] || 0) + 1; });
-  var q = S.cari.toUpperCase();
-  var tampil = semua.filter(function (x) {
-    if (S.saringPy && x['PENYULANG'] !== S.saringPy) return false;
-    if (!q) return true;
-    return [x.ID, x['PENYULANG'], x['SECTION/SEGMEN'], x['KETERANGAN'], x['JENIS TEMUAN'], x['PETUGAS INSPEKSI']].join(' ').toUpperCase().indexOf(q) !== -1;
-  });
-  isi.innerHTML = '<h1>Tindak lanjut</h1><p class="sub">' + semua.length + ' temuan belum dieksekusi' +
+  if (S.saringPy && !py[S.saringPy]) S.saringPy = '';
+  var tampil = semua.filter(cocokCari);
+  var nSelesai = S.data.jumlahSelesai !== undefined ? S.data.jumlahSelesai : selesai.length;
+  isi.innerHTML = '<h1>Tindak lanjut</h1><p class="sub">' + belum.length + ' belum dieksekusi · ' + nSelesai + ' selesai' +
     (S.data.diambil ? ' · data ' + esc(jamTampil(S.data.diambil)) : '') + '</p>' + htmlPesan() +
+    '<div class="segmen" role="tablist">' +
+    '<button role="tab" data-tl="belum" aria-selected="' + !selesaiMode + '">Belum eksekusi <b>' + belum.length + '</b></button>' +
+    '<button role="tab" data-tl="selesai" aria-selected="' + selesaiMode + '">Selesai <b>' + nSelesai + '</b></button></div>' +
     '<div class="alat"><input id="t-cari" type="text" placeholder="Cari…" value="' + esc(S.cari) + '" aria-label="Cari temuan">' +
     '<select id="t-py" aria-label="Saring penyulang"><option value="">Semua penyulang</option>' +
     Object.keys(py).sort().map(function (k) { return '<option value="' + esc(k) + '"' + (k === S.saringPy ? ' selected' : '') + '>' + esc(k) + ' (' + py[k] + ')</option>'; }).join('') +
     '</select></div>' +
-    (tampil.length ? tampil.map(function (x, i) {
-      var tunda = eksekusiTertunda(x.ID);
-      return '<button class="kartu" data-i="' + i + '"><div class="kartu-atas"><span>' + esc(tglTampil(x['TANGGAL INSPEKSI'])) + '</span><span>' + esc(x.ID) + '</span></div>' +
-        '<div class="kartu-judul">' + esc(x['PENYULANG']) + ' · ' + esc(x['SECTION/SEGMEN']) + '</div>' +
-        (x['KETERANGAN'] ? '<div class="kartu-ket">' + esc(x['KETERANGAN']) + '</div>' : '') +
-        '<div class="tags">' + (tunda ? '<span class="tag tag-tunggu">Eksekusi menunggu kirim</span>' : '<span class="tag tag-belum">Belum eksekusi</span>') +
-        '<span class="tag">' + esc(x['JENIS TEMUAN']) + '</span>' +
-        (/butuh padam/i.test(x['RENCANA TINDAK LANJUT']) ? '<span class="tag">Butuh padam</span>' : '') +
-        (/^butuh material/i.test(x['KEBUTUHAN MATERIAL']) ? '<span class="tag">Butuh material</span>' : '') +
-        (x._lokal ? '<span class="tag tag-tunggu">Belum terkirim</span>' : '') + '</div></button>';
-    }).join('') : '<div class="kosong-daftar">' + (semua.length ? 'Tidak ada yang cocok.' : 'Tidak ada temuan yang menunggu eksekusi.') + '</div>');
+    (selesaiMode && S.data.selesai === undefined ? '<div class="pesan pesan-info">Daftar temuan selesai butuh script MOTAHA versi terbaru di server. Hubungi admin.</div>' : '') +
+    (tampil.length ? tampil.map(function (x, i) { return selesaiMode ? kartuSelesai(x, i) : kartuBelum(x, i); }).join('') :
+      '<div class="kosong-daftar">' + (semua.length ? 'Tidak ada yang cocok.' : selesaiMode ? 'Belum ada temuan yang selesai.' : 'Tidak ada temuan yang menunggu eksekusi.') + '</div>') +
+    (selesaiMode && nSelesai > selesai.length ? '<p class="catatan" style="text-align:center">Menampilkan ' + selesai.length + ' temuan selesai terbaru dari ' + nSelesai + '. Selengkapnya di dashboard MOTAHA.</p>' : '');
+  Array.prototype.forEach.call(document.querySelectorAll('[data-tl]'), function (b) {
+    b.onclick = function () { S.tlMode = b.getAttribute('data-tl'); S.saringPy = ''; gambar(); };
+  });
   var tunda = null;
   $('#t-cari').oninput = function (e) {
     clearTimeout(tunda);
@@ -645,43 +659,93 @@ function gambarTindakLanjut(isi) {
   };
   $('#t-py').onchange = function (e) { S.saringPy = e.target.value; gambar(); };
   Array.prototype.forEach.call(document.querySelectorAll('.kartu[data-i]'), function (b) {
-    b.onclick = function () { var x = tampil[+b.getAttribute('data-i')]; S.detail = x.ID; S.eks = { foto: null, petugas: '', tanggal: hariIni() }; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+    b.onclick = function () {
+      var x = tampil[+b.getAttribute('data-i')];
+      S.detail = x.ID; S.detailSelesai = selesaiMode; S.eks = { foto: null, tanggal: hariIni() }; S.pesan = null; gambar(); window.scrollTo(0, 0);
+    };
+  });
+}
+
+function kartuBelum(x, i) {
+  var tunda = eksekusiTertunda(x.ID);
+  return '<button class="kartu" data-i="' + i + '"><div class="kartu-atas"><span>' + esc(tglTampil(x['TANGGAL INSPEKSI'])) + '</span><span>' + esc(x.ID) + '</span></div>' +
+    '<div class="kartu-judul">' + esc(x['PENYULANG']) + ' · ' + esc(x['SECTION/SEGMEN']) + '</div>' +
+    (x['KETERANGAN'] ? '<div class="kartu-ket">' + esc(x['KETERANGAN']) + '</div>' : '') +
+    '<div class="tags">' + (tunda ? '<span class="tag tag-tunggu">Eksekusi menunggu kirim</span>' : '<span class="tag tag-belum">Belum eksekusi</span>') +
+    '<span class="tag">' + esc(x['JENIS TEMUAN']) + '</span>' +
+    (/butuh padam/i.test(x['RENCANA TINDAK LANJUT']) ? '<span class="tag">Butuh padam</span>' : '') +
+    (/^butuh material/i.test(x['KEBUTUHAN MATERIAL']) ? '<span class="tag">Butuh material</span>' : '') +
+    (x._lokal ? '<span class="tag tag-tunggu">Belum terkirim</span>' : '') + '</div></button>';
+}
+
+function kartuSelesai(x, i) {
+  return '<button class="kartu" data-i="' + i + '"><div class="kartu-atas"><span>Selesai ' + esc(tglTampil(x['TANGGAL EKSEKUSI'])) + '</span><span>' + esc(x.ID) + '</span></div>' +
+    '<div class="kartu-judul">' + esc(x['PENYULANG']) + ' · ' + esc(x['SECTION/SEGMEN']) + '</div>' +
+    (x['KETERANGAN'] ? '<div class="kartu-ket">' + esc(x['KETERANGAN']) + '</div>' : '') +
+    '<div class="tags"><span class="tag tag-sudah">Sudah eksekusi</span><span class="tag">' + esc(x['JENIS TEMUAN']) + '</span>' +
+    (x['PETUGAS EKSEKUSI'] ? '<span class="tag">' + esc(x['PETUGAS EKSEKUSI']) + '</span>' : '') + '</div></button>';
+}
+
+/** Kotak foto dari Drive (lewat server, hanya saat online); disimpan sementara di memori. */
+function htmlFotoServer(id, label) {
+  if (!id) return '';
+  var ada = S.foto[id];
+  return '<div class="medan"><span class="label">' + label + '</span>' +
+    (ada && ada.data ? '<img class="foto-server" src="' + ada.data + '" alt="' + esc(label) + '">' :
+      '<button class="tombol" type="button" data-foto="' + esc(id) + '"' + (ada && ada.memuat ? ' disabled' : '') + '>' +
+      (ada && ada.memuat ? '<span class="putar"></span> Memuat foto…' : ada && ada.galat ? 'Coba lagi — ' + esc(ada.galat) : 'Lihat foto') + '</button>') + '</div>';
+}
+
+function pasangFotoServer() {
+  Array.prototype.forEach.call(document.querySelectorAll('[data-foto]'), function (b) {
+    b.onclick = async function () {
+      var id = b.getAttribute('data-foto');
+      if (!navigator.onLine) { toast('Foto hanya bisa dilihat saat ada sinyal.'); return; }
+      S.foto[id] = { memuat: true }; gambar();
+      try { var f = await api('fotoInspeksi', { fileId: id }); S.foto[id] = { data: 'data:' + f.mime + ';base64,' + f.data }; }
+      catch (e) { S.foto[id] = { galat: e.message }; }
+      gambar();
+    };
   });
 }
 
 function gambarDetail(isi) {
-  var x = daftarTemuan().filter(function (t) { return t.ID === S.detail; })[0];
+  var sumber = S.detailSelesai ? (S.data.selesai || []) : daftarTemuan();
+  var x = sumber.filter(function (t) { return t.ID === S.detail; })[0];
   if (!x) { S.detail = null; gambar(); return; }
-  var tunda = eksekusiTertunda(x.ID), e = S.eks;
+  var tunda = !S.detailSelesai && eksekusiTertunda(x.ID), e = S.eks || (S.eks = { foto: null, tanggal: hariIni() });
   var baris = function (k, v) { return v ? '<dt>' + k + '</dt><dd>' + v + '</dd>' : ''; };
   isi.innerHTML = '<button class="kembali" id="d-kembali">‹ Kembali ke daftar</button>' + htmlPesan() +
-    '<div class="panel"><div class="kartu-atas"><span>' + esc(x.ID) + '</span>' + (x._lokal ? '<span class="tag tag-tunggu">Belum terkirim</span>' : '') + '</div>' +
+    '<div class="panel"><div class="kartu-atas"><span>' + esc(x.ID) + '</span>' +
+    (x._lokal ? '<span class="tag tag-tunggu">Belum terkirim</span>' : S.detailSelesai ? '<span class="tag tag-sudah">Sudah eksekusi</span>' : '<span class="tag tag-belum">Belum eksekusi</span>') + '</div>' +
     '<h1 style="margin:6px 0 12px">' + esc(x['PENYULANG']) + ' · ' + esc(x['SECTION/SEGMEN']) + '</h1><dl class="rinci">' +
     baris('Tanggal inspeksi', esc(tglTampil(x['TANGGAL INSPEKSI']))) + baris('Jenis temuan', esc(x['JENIS TEMUAN'])) +
     baris('Rencana', esc(x['RENCANA TINDAK LANJUT'])) + baris('Material', esc(x['KEBUTUHAN MATERIAL'])) +
     baris('Petugas inspeksi', esc(x['PETUGAS INSPEKSI'])) + baris('Keterangan', esc(x['KETERANGAN'])) +
     baris('Koordinat', x['KOORDINAT'] ? esc(x['KOORDINAT']) + ' · <a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(x['KOORDINAT']) + '">Petunjuk arah ↗</a>' : '') +
-    '</dl></div>' +
-    (tunda ? '<div class="pesan pesan-info">Eksekusi oleh <b>' + esc(tunda.muatan.petugasEksekusi) + '</b> (' + esc(tglTampil(tunda.muatan.tanggalEksekusi)) + ') sudah tersimpan di HP dan menunggu dikirim.</div>' :
+    (S.detailSelesai ? baris('Tanggal eksekusi', esc(tglTampil(x['TANGGAL EKSEKUSI']))) + baris('Petugas eksekusi', esc(x['PETUGAS EKSEKUSI'])) : '') +
+    '</dl>' + (x._lokal ? '' : htmlFotoServer(x._fotoTemuan, 'Foto temuan') + (S.detailSelesai ? htmlFotoServer(x._fotoEksekusi, 'Foto setelah eksekusi') : '')) + '</div>' +
+    (S.detailSelesai ? '' : tunda ? '<div class="pesan pesan-info">Eksekusi oleh <b>' + esc(tunda.muatan.petugasEksekusi) + '</b> (' + esc(tglTampil(tunda.muatan.tanggalEksekusi)) + ') sudah tersimpan di HP dan menunggu dikirim.</div>' :
       '<form id="f-eks" class="panel" novalidate><h1 style="font-size:17px">Tandai sudah eksekusi</h1><p class="sub">Tersimpan di HP dulu, lalu terkirim saat ada sinyal.</p>' +
-      htmlFoto('e-foto', 'Foto setelah eksekusi', true, e.foto) +
-      '<div class="medan"><label for="e-pe">Nama petugas eksekusi <span class="wajib">*</span></label><input id="e-pe" type="text" value="' + esc(e.petugas) + '"></div>' +
+      htmlFoto('e-foto', 'Foto setelah eksekusi', true, e.foto) + htmlPetugasEksekusi('e-pe') +
       '<div class="medan"><label for="e-tgl">Tanggal eksekusi <span class="wajib">*</span></label><input id="e-tgl" type="date" min="' + esc(x['TANGGAL INSPEKSI']) + '" max="' + hariIni() + '" value="' + esc(e.tanggal) + '"></div>' +
       '<button class="tombol-utama" type="submit">Simpan eksekusi</button></form>');
   $('#d-kembali').onclick = function () { S.detail = null; S.pesan = null; gambar(); };
-  if (tunda) return;
-  var ambil = function () { e.petugas = $('#e-pe').value.trim(); e.tanggal = $('#e-tgl').value; };
+  pasangFotoServer();
+  if (S.detailSelesai || tunda) return;
+  var ambil = function () { e.tanggal = $('#e-tgl').value; };
   pasangFoto('e-foto', function (foto) { ambil(); e.foto = foto; gambar(); });
   $('#f-eks').onsubmit = async function (ev) {
     ev.preventDefault(); ambil();
-    var salah = !e.foto ? 'Foto setelah eksekusi wajib dilampirkan.' : !e.petugas ? 'Nama petugas eksekusi wajib diisi.' :
+    var petugas = namaLogin();
+    var salah = !e.foto ? 'Foto setelah eksekusi wajib dilampirkan.' : !petugas ? 'Nama akun tidak terbaca — keluar lalu masuk lagi.' :
       !e.tanggal ? 'Tanggal eksekusi wajib diisi.' : e.tanggal < x['TANGGAL INSPEKSI'] ? 'Tanggal eksekusi tidak boleh sebelum tanggal inspeksi.' :
       e.tanggal > hariIni() ? 'Tanggal eksekusi tidak boleh di masa depan.' : '';
     if (salah) { S.pesan = { jenis: 'galat', teks: salah }; gambar(); window.scrollTo(0, 0); return; }
     var item = {
       idAntre: 'EKS-' + x.ID, aksi: 'eksekusiInspeksi', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
-      ringkasan: { judul: 'Eksekusi ' + x['PENYULANG'] + ' · ' + x['SECTION/SEGMEN'], sub: x.ID + ' · ' + e.petugas, tanggal: e.tanggal },
-      muatan: { id: x.ID, fotoEksekusi: { mime: e.foto.mime, data: e.foto.data }, petugasEksekusi: e.petugas, tanggalEksekusi: e.tanggal }
+      ringkasan: { judul: 'Eksekusi ' + x['PENYULANG'] + ' · ' + x['SECTION/SEGMEN'], sub: x.ID + ' · ' + petugas, tanggal: e.tanggal },
+      muatan: { id: x.ID, fotoEksekusi: { mime: e.foto.mime, data: e.foto.data }, petugasEksekusi: petugas, tanggalEksekusi: e.tanggal }
     };
     try { await DB.simpan(item); } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }
     await muatAntrean();
@@ -723,7 +787,7 @@ function gambarAntrean(isi) {
     S.draf = Object.assign(drafBaru(), {
       tanggal: m.tanggal, penyulang: m.penyulang, section: m.section, jenis: m.jenis, rencana: m.rencana, material: m.material,
       koordinat: m.koordinat, keterangan: m.keterangan, status: m.status, petugasInspeksi: m.petugasInspeksi,
-      petugasEksekusi: m.petugasEksekusi || '', tanggalEksekusi: m.tanggalEksekusi || hariIni(),
+      petugasEksekusi: namaLogin(), tanggalEksekusi: m.tanggalEksekusi || hariIni(),
       fotoTemuan: m.fotoTemuan ? { mime: m.fotoTemuan.mime, data: m.fotoTemuan.data, kb: Math.round(m.fotoTemuan.data.length * 0.75 / 1024) } : null,
       fotoEksekusi: m.fotoEksekusi ? { mime: m.fotoEksekusi.mime, data: m.fotoEksekusi.data, kb: Math.round(m.fotoEksekusi.data.length * 0.75 / 1024) } : null
     });
