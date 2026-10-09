@@ -6,18 +6,18 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-09.9';
-var VERSI_SERVER_MIN = '2026-10-09.9'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
+var VERSI_PWA = '2026-10-09.10';
+var VERSI_SERVER_MIN = '2026-10-09.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-var KUNCI = { api: 'motaha-api', sesi: 'motaha-sesi', data: 'motaha-data', tema: 'motaha-tema', dataRow: 'motaha-data-row', regu: 'motaha-regu' };
+var KUNCI = { api: 'motaha-api', sesi: 'motaha-sesi', data: 'motaha-data', tema: 'motaha-tema', dataRow: 'motaha-data-row', wo: 'motaha-wo' };
 
 var S = {
   api: '', sesi: null, data: null, antrean: [], tab: 'input', draf: null, detail: null, eks: null,
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
   cari: '', saringPy: '', terakhirKirim: null, pembaruan: null, tlMode: 'belum', foto: {},
-  dataRow: null, drafRow: null, pesanRow: '', absenForm: null
+  dataRow: null, drafRow: null, pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: ''
 };
 
 /* ---------- Util ---------- */
@@ -54,6 +54,7 @@ var IKON = {
   antre: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>',
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   row: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22V12"/><path d="M12 12c-4 0-7-2.5-7-6 3 0 6 1 7 4 1-3 4-4 7-4 0 3.5-3 6-7 6z"/><path d="M4 22h16"/></svg>',
+  real: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
   kamera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="4"/></svg>'
 };
 
@@ -340,11 +341,12 @@ function gambar() {
     '<main id="isi"></main>' +
     '<nav class="nav" aria-label="Menu utama"><div class="nav-isi">' +
     tombolNav('input', 'Temuan', IKON.input, 0) + tombolNav('tl', 'Tindak lanjut', IKON.tl, 0) + tombolNav('row', 'ROW', IKON.row, 0) +
+    tombolNav('real', 'Realisasi', IKON.real, 0) +
     tombolNav('antre', 'Antrean', IKON.antre, jumlah) + '</div></nav>' +
     (S.lembar ? htmlMenu() : '');
   $('#buka-menu').onclick = function () { S.lembar = true; gambar(); };
   Array.prototype.forEach.call(document.querySelectorAll('[data-tab]'), function (b) {
-    b.onclick = function () { simpanDrafSekarang(); S.tab = b.getAttribute('data-tab'); S.detail = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+    b.onclick = function () { simpanDrafSekarang(); S.tab = b.getAttribute('data-tab'); S.detail = null; S.detailReal = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
   });
   if (S.lembar) pasangMenu();
   var isi = $('#isi');
@@ -356,6 +358,7 @@ function gambar() {
   if (S.tab === 'input') gambarInput(isi);
   else if (S.tab === 'tl') gambarTindakLanjut(isi);
   else if (S.tab === 'row') gambarRowHp(isi);
+  else if (S.tab === 'real') gambarRealisasiHp(isi);
   else gambarAntrean(isi);
 }
 
@@ -763,40 +766,92 @@ function gambarDetail(isi) {
   };
 }
 
-/* ---------- ROW: Mulai/Selesai, rencana, realisasi ---------- */
+/* ---------- ROW: WO (rencana) → Mulai · Istirahat · Mulai lagi · Selesai, temuan & realisasi ----------
+ * Alur: pilih WO hari ini → Mulai (konfirmasi kehadiran; yang tidak hadir wajib diberi alasan) → temuan inspeksi
+ * ROW di penyulang & section WO muncul → input realisasi (dari temuan atau di luar temuan) → Istirahat / Mulai lagi
+ * → Selesai (jumlah gawang). Satu regu hanya boleh punya satu WO berjalan; WO lain terkunci sampai Selesai.
+ */
+var LABEL_ABSEN = { MULAI: 'Mulai', ISTIRAHAT: 'Istirahat', LANJUT: 'Mulai lagi', SELESAI: 'Selesai' };
+var LABEL_STATUS_WO = { belum: 'Belum mulai', berjalan: 'Sedang dikerjakan', istirahat: 'Istirahat', selesai: 'Selesai' };
+
 function waktuLokal(d) {
   d = d || new Date();
   var dua = function (n) { return (n < 10 ? '0' : '') + n; };
   return d.getFullYear() + '-' + dua(d.getMonth() + 1) + '-' + dua(d.getDate()) + ' ' + dua(d.getHours()) + ':' + dua(d.getMinutes()) + ':' + dua(d.getSeconds());
 }
 function daftarRegu() { return ((S.dataRow && S.dataRow.regu) || []).filter(function (r) { return r.aktif !== false; }); }
-function namaRegu() {
-  var simpan = bacaLokal(KUNCI.regu) || '', d = daftarRegu();
-  return d.some(function (r) { return r.nama === simpan; }) ? simpan : (d.length === 1 ? d[0].nama : '');
+function dataRegu(nama) {
+  var n = String(nama || '').toUpperCase().trim();
+  return daftarRegu().filter(function (r) { return String(r.nama).toUpperCase().trim() === n; })[0] || null;
 }
-function dataRegu(nama) { return daftarRegu().filter(function (r) { return r.nama === nama; })[0] || null; }
 function meterGawang() { return (S.dataRow && S.dataRow.pilihan && S.dataRow.pilihan.meterPerGawang) || 50; }
+function alasanTidakHadir() { return (S.dataRow && S.dataRow.pilihan && S.dataRow.pilihan.alasanTidakHadir) || ['Sakit', 'Izin', 'Tidak ada informasi']; }
 function angkaId(n, d) { return Number(n).toLocaleString('id-ID', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 }); }
+function apakahTebang(jenis) { return ((S.dataRow && S.dataRow.pilihan.pengukuran) || []).indexOf(jenis) !== -1; }
+function jamDari(w) { return String(w || '').slice(11, 16); }
 
-function drafRowBaru(lama) {
-  return { idRencana: '', penyulang: lama ? lama.penyulang : '', section: '', sectionManual: false, jenis: lama ? lama.jenis : '',
-    koordinat: '', keterangan: '', fotoSebelum: null, fotoSesudah: null, fotoPengukuran: null, idTemuan: [] };
+function drafRowBaru(idRencana, mode, idTemuan) {
+  return { idRencana: idRencana || '', mode: mode || '', idTemuan: idTemuan ? [idTemuan] : [], jenis: '',
+    koordinat: '', keterangan: '', fotoSebelum: null, fotoSesudah: null, fotoPengukuran: null };
 }
 function simpanDrafRow() { DB.taruh('drafRow', S.drafRow).catch(function () {}); }
 
-/** Mulai/Selesai hari ini milik regu ini: dari server + yang masih di antrean. */
-function absenHariIni() {
-  var t = hariIni(), regu = namaRegu(), hasil = { MULAI: null, SELESAI: null };
-  var semua = ((S.dataRow && S.dataRow.absen) || []).map(function (a) { return { jenis: a.JENIS, waktu: a.WAKTU, regu: a.REGU, tanggal: a.TANGGAL, gawang: a.GAWANG }; })
-    .concat(S.antrean.filter(function (x) { return x.aksi === 'absenRow'; }).map(function (x) {
-      return { jenis: x.muatan.jenis, waktu: x.muatan.waktu, regu: x.muatan.regu, tanggal: x.muatan.waktu.slice(0, 10), gawang: x.muatan.gawang, antre: true };
-    }));
-  semua.forEach(function (a) {
-    if (a.tanggal !== t || a.regu !== regu) return;
-    var lama = hasil[a.jenis];
-    if (!lama || (a.jenis === 'MULAI' ? a.waktu < lama.waktu : a.waktu > lama.waktu)) hasil[a.jenis] = a;
+function cariWo(id) { return ((S.dataRow && S.dataRow.rencana) || []).filter(function (r) { return r.ID === id; })[0] || null; }
+function woHariIni() {
+  var t = hariIni();
+  return ((S.dataRow && S.dataRow.rencana) || []).filter(function (r) { return r.TANGGAL === t; })
+    .sort(function (a, b) { return (a.REGU + a.PENYULANG + a['SECTION/SEGMEN']) < (b.REGU + b.PENYULANG + b['SECTION/SEGMEN']) ? -1 : 1; });
+}
+function aktif(x) { return x.status !== 'ditolak'; }
+
+/** Semua catatan Mulai/Istirahat/Mulai lagi/Selesai: dari server + antrean HP (yang ditolak server tidak ikut). */
+function absenSemua() {
+  return ((S.dataRow && S.dataRow.absen) || []).filter(function (a) { return a['ID RENCANA']; }).map(function (a) {
+    return { id: String(a.ID).toUpperCase(), idRencana: a['ID RENCANA'], jenis: a.JENIS, waktu: a.WAKTU, regu: a.REGU, gawang: a.GAWANG, hadir: a.HADIR, tidakHadir: a['TIDAK HADIR'] };
+  }).concat(S.antrean.filter(function (x) { return x.aksi === 'absenRow' && aktif(x) && x.muatan.idRencana; }).map(function (x) {
+    var m = x.muatan;
+    return { id: String(m.idKlien).toUpperCase(), idRencana: m.idRencana, jenis: m.jenis, waktu: m.waktu, regu: m.regu, gawang: m.gawang, antre: true,
+      hadir: (m.hadir || []).join(', '), tidakHadir: (m.tidakHadir || []).map(function (t) { return t.nama + ' (' + t.alasan + ')'; }).join(', ') };
+  }));
+}
+
+/** Status WO: {status, catatan:[urut waktu], mulai, selesai, gawang}. */
+function statusWo(id, semua) {
+  var catatan = (semua || absenSemua()).filter(function (a) { return a.idRencana === id; });
+  var ada = {}; catatan = catatan.filter(function (a) { if (ada[a.id]) return false; ada[a.id] = 1; return true; });
+  catatan.sort(function (a, b) { return String(a.waktu) < String(b.waktu) ? -1 : String(a.waktu) > String(b.waktu) ? 1 : 0; });
+  var st = 'belum', hasil = { mulai: null, selesai: null, gawang: '' };
+  catatan.forEach(function (a) {
+    if (st === 'selesai') return;
+    if (a.jenis === 'MULAI' && !hasil.mulai) hasil.mulai = a;
+    st = a.jenis === 'MULAI' || a.jenis === 'LANJUT' ? 'berjalan' : a.jenis === 'ISTIRAHAT' ? 'istirahat' : a.jenis === 'SELESAI' ? 'selesai' : st;
+    if (a.jenis === 'SELESAI') { hasil.selesai = a; hasil.gawang = a.gawang; }
   });
+  hasil.status = st; hasil.catatan = catatan;
   return hasil;
+}
+
+/** WO lain milik regu yang sama (hari ini) yang sedang berjalan / istirahat — mengunci WO lain. */
+function woBerjalanRegu(regu, kecuali) {
+  var semua = absenSemua(), n = String(regu || '').toUpperCase().trim();
+  return woHariIni().filter(function (r) {
+    if (r.ID === kecuali || String(r.REGU).toUpperCase().trim() !== n) return false;
+    var s = statusWo(r.ID, semua).status; return s === 'berjalan' || s === 'istirahat';
+  })[0] || null;
+}
+
+/** Realisasi satu WO: dari server + antrean (yang ditolak tidak ikut), berurut waktu. */
+function realisasiWo(id) {
+  var ada = {};
+  var antre = S.antrean.filter(function (x) { return x.aksi === 'simpanRealisasiRow' && aktif(x) && x.muatan.idRencana === id; }).map(function (x) {
+    var m = x.muatan; ada[String(m.idKlien).toUpperCase()] = 1;
+    return { id: m.idKlien, jenis: m.jenis, waktu: m.waktu, koordinat: m.koordinat, keterangan: m.keterangan, idTemuan: (m.idTemuan || []).join(', '), antre: true };
+  });
+  var server = ((S.dataRow && S.dataRow.realisasi) || []).filter(function (x) { return x['ID RENCANA'] === id && !ada[String(x.ID).toUpperCase()]; }).map(function (x) {
+    return { id: x.ID, jenis: x['JENIS PEKERJAAN'], waktu: x.WAKTU, koordinat: x.KOORDINAT, keterangan: x.KETERANGAN, idTemuan: x['ID TEMUAN'],
+      fotoSebelum: x.fotoSebelum, fotoSesudah: x.fotoSesudah, fotoUkur: x.fotoUkur, petugas: x.PETUGAS };
+  });
+  return server.concat(antre).sort(function (a, b) { return String(a.waktu) < String(b.waktu) ? -1 : 1; });
 }
 
 /**
@@ -808,6 +863,7 @@ function temuanRowTerbuka(penyulang, section) {
   var baku = function (t) { return String(t || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim(); };
   var diantre = {};
   S.antrean.forEach(function (x) {
+    if (!aktif(x)) return;
     if (x.aksi === 'eksekusiInspeksi') diantre[x.muatan.id] = 1;
     if (x.aksi === 'simpanRealisasiRow') (x.muatan.idTemuan || []).forEach(function (id) { diantre[id] = 1; });
   });
@@ -816,290 +872,346 @@ function temuanRowTerbuka(penyulang, section) {
       (!section || baku(t['SECTION/SEGMEN']) === baku(section));
   });
 }
+function cariTemuan(id) { return daftarTemuan().filter(function (t) { return t.ID === id; })[0] || null; }
 
-function htmlTemuanRow(f) {
-  var daftar = temuanRowTerbuka(f.penyulang, f.section);
-  if (!f.penyulang || !f.section) return '';
-  if (!daftar.length) return '<p class="catatan">Tidak ada temuan inspeksi ROW yang belum dieksekusi di section ini.</p>';
-  return '<div class="temuan-row"><b>Temuan inspeksi ROW di section ini (' + daftar.length + ')</b>' +
-    '<p class="catatan">Centang temuan yang ikut selesai dengan realisasi ini — otomatis ditandai Sudah Eksekusi memakai foto sesudah.</p>' +
-    daftar.map(function (t) {
-      return '<div class="kartu kartu-temuan-row"><label class="cek-hadir"><input type="checkbox" data-temuan="' + esc(t.ID) + '"' + ((f.idTemuan || []).indexOf(t.ID) !== -1 ? ' checked' : '') + '>' +
-        '<span><b>' + esc(tglTampil(t['TANGGAL INSPEKSI'])) + '</b> · ' + esc(t.ID) + '</span></label>' +
-        (t['KETERANGAN'] ? '<div class="kartu-ket">' + esc(t['KETERANGAN']) + '</div>' : '') +
-        '<div class="kartu-ket">' + esc(t['RENCANA TINDAK LANJUT'] || '') + (t['KOORDINAT'] ? ' · ' + esc(t['KOORDINAT']) : '') + '</div>' +
-        htmlFotoServer(t._fotoTemuan, 'Foto temuan') + '</div>';
-    }).join('') + '</div>';
+function teksTarget(r) {
+  var tk = r['TARGET PEMANGKASAN (KMS)'], tb = r['TARGET PENEBANGAN (BTG)'];
+  return [tk ? 'Pangkas ' + angkaId(tk, 2) + ' kms' : '', tb ? 'Tebang ' + tb + ' btg' : ''].filter(Boolean).join(' · ') || r['JENIS PEKERJAAN'] || '';
 }
-
-/** Rencana kerja hari ini yang dijadwalkan untuk regu terpilih. */
-function rencanaReguHari() {
-  var t = hariIni(), regu = namaRegu();
-  return ((S.dataRow && S.dataRow.rencana) || []).filter(function (r) { return r.TANGGAL === t && regu && r.REGU === regu; });
+function tagStatusWo(st) {
+  var kelas = { belum: 'tag-belum', berjalan: 'tag-jalan', istirahat: 'tag-tunggu', selesai: 'tag-sudah' }[st];
+  return '<span class="tag ' + kelas + '">' + LABEL_STATUS_WO[st] + '</span>';
 }
-
-/** Realisasi hari ini milik regu terpilih: dari server + yang masih di antrean (tanpa ganda). */
-function realisasiReguHari() {
-  var t = hariIni(), regu = namaRegu(), ada = {};
-  if (!regu) return [];
-  var antre = S.antrean.filter(function (x) { return x.aksi === 'simpanRealisasiRow' && x.muatan.waktu.slice(0, 10) === t && x.muatan.regu === regu; })
-    .map(function (x) {
-      ada[String(x.muatan.idKlien).toUpperCase()] = 1;
-      return { jenis: x.muatan.jenis, penyulang: x.muatan.penyulang, section: x.muatan.section, waktu: x.muatan.waktu, idRencana: x.muatan.idRencana, antre: true };
-    });
-  var server = ((S.dataRow && S.dataRow.realisasi) || []).filter(function (x) { return x.TANGGAL === t && x.REGU === regu && !ada[String(x.ID).toUpperCase()]; })
-    .map(function (x) { return { jenis: x['JENIS PEKERJAAN'], penyulang: x.PENYULANG, section: x['SECTION/SEGMEN'], waktu: x.WAKTU, idRencana: x['ID RENCANA'] }; });
-  return server.concat(antre).sort(function (a, b) { return String(a.waktu) < String(b.waktu) ? -1 : 1; });
-}
-
-function realisasiHariIniRow() {
-  var r = realisasiReguHari();
-  return { server: r.filter(function (x) { return !x.antre; }).length, antre: r.filter(function (x) { return x.antre; }).length };
-}
-
-function apakahTebang(jenis) { return ((S.dataRow && S.dataRow.pilihan.pengukuran) || []).indexOf(jenis) !== -1; }
-
-/** Daftar rencana kerja regu hari ini (dipakai di form Mulai). */
-function htmlRencanaKerja() {
-  var ren = rencanaReguHari();
-  if (!ren.length) return '<div class="rencana-kerja kosong"><b>Rencana kerja hari ini</b><p class="catatan">Belum ada pekerjaan yang dijadwalkan untuk ' + esc(namaRegu() || 'regu ini') + ' hari ini. Hubungi admin bila seharusnya ada.</p></div>';
-  return '<div class="rencana-kerja"><b>Rencana kerja hari ini (' + ren.length + ')</b>' + ren.map(function (r) {
-    var tk = r['TARGET PEMANGKASAN (KMS)'], tb = r['TARGET PENEBANGAN (BTG)'];
-    return '<div class="rk-item"><div><b>' + esc(r.PENYULANG) + '</b> · ' + esc(r['SECTION/SEGMEN']) + '</div><small>' +
-      esc([r['JENIS PEKERJAAN'], tk ? 'target pangkas ' + angkaId(tk, 2) + ' kms' : '', tb ? 'target tebang ' + tb + ' btg' : ''].filter(Boolean).join(' · ')) +
-      (r.KETERANGAN ? ' · ' + esc(r.KETERANGAN) : '') + '</small></div>';
+function htmlLini(catatan) {
+  if (!catatan.length) return '';
+  return '<div class="lini-wo">' + catatan.map(function (a) {
+    return '<span class="lini-' + a.jenis.toLowerCase() + '"><small>' + LABEL_ABSEN[a.jenis] + '</small><b>' + jamDari(a.waktu) + '</b>' + (a.antre ? '<em>antre</em>' : '') + '</span>';
   }).join('') + '</div>';
 }
 
-/**
- * Ringkasan realisasi hari ini regu terpilih (dipakai di form Selesai & setelah Selesai).
- * gawang: angka atau '' (belum diisi). Pemangkasan kms = gawang × meter/gawang; penebangan = jumlah titik penebangan.
- */
-function htmlRingkasRealisasi(gawang, judul) {
-  var rr = realisasiReguHari(), ren = rencanaReguHari(), kunci = function (p, s) { return p + ' · ' + s; };
-  var tKms = ren.reduce(function (a, r) { return a + (+r['TARGET PEMANGKASAN (KMS)'] || 0); }, 0);
-  var tBtg = ren.reduce(function (a, r) { return a + (+r['TARGET PENEBANGAN (BTG)'] || 0); }, 0);
-  var per = {}, urut = [];
-  var tambah = function (p, s, dijadwal) { var k = kunci(p, s); if (!per[k]) { per[k] = { nama: k, pangkas: 0, tebang: 0, jadwal: false }; urut.push(k); } if (dijadwal) per[k].jadwal = true; return per[k]; };
-  ren.forEach(function (r) { tambah(r.PENYULANG, r['SECTION/SEGMEN'], true); });
-  rr.forEach(function (x) { var o = tambah(x.penyulang, x.section, false); if (apakahTebang(x.jenis)) o.tebang++; else o.pangkas++; });
-  var nPangkas = rr.filter(function (x) { return !apakahTebang(x.jenis); }).length, nBtg = rr.length - nPangkas;
-  var adaGawang = gawang !== '' && gawang !== null && gawang !== undefined && isFinite(+gawang);
-  var kms = adaGawang ? +gawang * meterGawang() / 1000 : null;
+/** Ringkasan realisasi satu WO (form Selesai, WO selesai, menu Realisasi). gawang: angka atau '' (belum diisi). */
+function htmlRingkasWo(wo, gawang, judul) {
+  var rr = realisasiWo(wo.ID), nTebang = rr.filter(function (x) { return apakahTebang(x.jenis); }).length, nPangkas = rr.length - nTebang;
+  var nTemuan = rr.reduce(function (a, x) { return a + (x.idTemuan ? String(x.idTemuan).split(',').filter(function (s) { return s.trim(); }).length : 0); }, 0);
+  var tKms = +wo['TARGET PEMANGKASAN (KMS)'] || 0, tBtg = +wo['TARGET PENEBANGAN (BTG)'] || 0;
+  var adaG = gawang !== '' && gawang !== null && gawang !== undefined && isFinite(+gawang), kms = adaG ? +gawang * meterGawang() / 1000 : null;
   var persen = function (n, t) { return t ? ' (' + Math.round(n / t * 100) + '%)' : ''; };
-  return '<div class="ringkas-realisasi"><b>' + esc(judul || 'Realisasi hari ini') + '</b>' +
-    '<div class="rr-angka"><div><small>Pemangkasan</small><b id="rr-kms">' + (kms === null ? '—' : angkaId(kms, 2) + ' kms') + '</b>' +
-    '<small id="rr-kms-ket">' + (kms === null ? 'isi jumlah gawang' : angkaId(+gawang) + ' gawang') + (tKms ? ' · target ' + angkaId(tKms, 2) + ' kms' : '') +
-    '<span id="rr-kms-persen">' + (kms === null ? '' : persen(kms, tKms)) + '</span></small></div>' +
-    '<div><small>Penebangan</small><b>' + nBtg + ' btg</b><small>' + (tBtg ? 'target ' + tBtg + ' btg' + persen(nBtg, tBtg) : 'tanpa target') + '</small></div>' +
-    '<div><small>Titik pangkas</small><b>' + nPangkas + '</b><small>titik foto</small></div></div>' +
-    (urut.length ? '<div class="rr-rinci">' + urut.map(function (k) {
-      var o = per[k], isi = [o.pangkas ? o.pangkas + ' titik pangkas' : '', o.tebang ? o.tebang + ' btg tebang' : ''].filter(Boolean).join(' · ');
-      return '<div class="rr-baris' + (isi ? '' : ' kosong') + '"><span>' + esc(o.nama) + (o.jadwal ? '' : ' <small>(di luar rencana)</small>') + '</span><span>' + (isi || 'belum ada realisasi') + '</span></div>';
-    }).join('') + '</div>' : '<p class="catatan">Belum ada realisasi yang diinput hari ini.</p>') +
+  return '<div class="ringkas-realisasi"><b>' + esc(judul) + '</b><div class="rr-angka">' +
+    '<div><small>Pemangkasan</small><b>' + (kms === null ? '—' : angkaId(kms, 2) + ' kms') + '</b><small>' + (kms === null ? 'isi jumlah gawang' : angkaId(+gawang) + ' gawang') +
+    (tKms ? ' · target ' + angkaId(tKms, 2) + ' kms' + (kms === null ? '' : persen(kms, tKms)) : '') + '</small></div>' +
+    '<div><small>Penebangan</small><b>' + nTebang + ' btg</b><small>' + (tBtg ? 'target ' + tBtg + ' btg' + persen(nTebang, tBtg) : 'tanpa target') + '</small></div>' +
+    '<div><small>Titik pangkas</small><b>' + nPangkas + '</b><small>' + nTemuan + ' temuan ditutup</small></div></div>' +
     (rr.some(function (x) { return x.antre; }) ? '<p class="catatan">Sebagian realisasi masih di antrean HP — ikut dihitung.</p>' : '') + '</div>';
 }
 
+function htmlTitikRealisasi(rr, foto) {
+  if (!rr.length) return '<div class="kosong-daftar">Belum ada realisasi.</div>';
+  return rr.map(function (x, i) {
+    return '<div class="kartu titik-row"><div class="kartu-judul">' + (i + 1) + '. ' + esc(x.jenis) + ' · ' + esc(jamDari(x.waktu)) + '</div>' +
+      (x.idTemuan ? '<div class="kartu-ket">✅ Menutup temuan ' + esc(x.idTemuan) + '</div>' : '<div class="kartu-ket">Di luar temuan inspeksi</div>') +
+      (x.koordinat ? '<div class="kartu-ket">📍 ' + esc(x.koordinat) + '</div>' : '') + (x.keterangan ? '<div class="kartu-ket">' + esc(x.keterangan) + '</div>' : '') +
+      (x.antre ? '<div class="tags"><span class="tag tag-tunggu">Belum terkirim</span></div>' :
+        foto ? '<div class="foto-titik">' + htmlFotoServer(x.fotoSebelum, 'Sebelum') + htmlFotoServer(x.fotoSesudah, 'Sesudah') + (x.fotoUkur ? htmlFotoServer(x.fotoUkur, 'Pengukuran batang') : '') + '</div>' : '') +
+      '</div>';
+  }).join('');
+}
+
+/* ----- Tampilan menu ROW ----- */
+function gambarRowHp(isi) {
+  var d = S.dataRow;
+  if (!d) {
+    isi.innerHTML = '<h1>ROW</h1>' + htmlPesan() + '<div class="panel"><p>' + (S.pesanRow ? esc(S.pesanRow) : navigator.onLine ? '<span class="putar"></span> Mengambil rencana ROW…' :
+      'Data ROW belum ada di HP ini. Sambungkan ke internet sekali.') + '</p></div>';
+    return;
+  }
+  if (!d.pilihan || !d.pilihan.alasanTidakHadir) {
+    isi.innerHTML = '<h1>ROW</h1><div class="panel"><p class="pesan pesan-galat">Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN +
+      '. Hubungi admin, lalu buka menu akun → Perbarui data.</p></div>';
+    return;
+  }
+  var wo = S.wo ? cariWo(S.wo) : null;
+  if (S.wo && !wo) { S.wo = null; tulisLokal(KUNCI.wo, null); }
+  if (wo && S.formRow) gambarFormRealisasi(isi, wo);
+  else if (wo) gambarDetailWo(isi, wo);
+  else gambarDaftarWo(isi);
+  pasangFotoServer();
+}
+
+function gambarDaftarWo(isi) {
+  var daftar = woHariIni(), semua = absenSemua();
+  isi.innerHTML = '<h1>ROW · ' + esc(tglTampil(hariIni())) + '</h1>' +
+    '<p class="sub">Pilih WO (rencana kerja hari ini) yang akan dikerjakan.</p>' + htmlPesan() +
+    '<h2 class="judul-bagian">Rencana hari ini (' + daftar.length + ' WO)</h2>' +
+    (daftar.length ? daftar.map(function (r) {
+      var s = statusWo(r.ID, semua), nT = temuanRowTerbuka(r.PENYULANG, r['SECTION/SEGMEN']).length, rg = dataRegu(r.REGU);
+      var kunci = s.status === 'belum' ? woBerjalanRegu(r.REGU, r.ID) : null;
+      return '<button type="button" class="kartu kartu-rencana kartu-wo st-' + s.status + '" data-wo="' + esc(r.ID) + '">' +
+        '<div class="kartu-judul">' + esc(r.PENYULANG + ' · ' + r['SECTION/SEGMEN']) + '</div>' +
+        '<div class="kartu-ket">' + esc(teksTarget(r)) + '</div>' +
+        '<div class="kartu-ket">' + esc(r.REGU + (rg ? ' · ' + rg.vendor : '')) + '</div>' +
+        '<div class="tags">' + tagStatusWo(s.status) + (nT && s.status !== 'selesai' ? '<span class="tag tag-belum">' + nT + ' temuan ROW</span>' : '') +
+        (kunci ? '<span class="tag">🔒 Tunggu WO ' + esc(kunci['SECTION/SEGMEN']) + ' selesai</span>' : '') + '</div></button>';
+    }).join('') : '<div class="kosong-daftar">Belum ada WO yang dijadwalkan hari ini. Admin membuatnya di dashboard (Monitoring ROW → + Rencana ROW).</div>');
+  Array.prototype.forEach.call(document.querySelectorAll('[data-wo]'), function (b) {
+    b.onclick = function () { S.wo = b.getAttribute('data-wo'); tulisLokal(KUNCI.wo, S.wo); S.absenForm = null; S.formRow = false; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  });
+}
+
+function gambarDetailWo(isi, wo) {
+  var s = statusWo(wo.ID), rg = dataRegu(wo.REGU), rr = realisasiWo(wo.ID), f = S.drafRow;
+  var kunci = s.status === 'belum' ? woBerjalanRegu(wo.REGU, wo.ID) : null, hariLain = wo.TANGGAL !== hariIni();
+  var temuan = temuanRowTerbuka(wo.PENYULANG, wo['SECTION/SEGMEN']), jalan = s.status === 'berjalan';
+  var tombol = '';
+  if (!S.absenForm && !hariLain) {
+    if (s.status === 'belum') tombol = '<button class="tombol-utama" type="button" id="w-mulai"' + (kunci || !rg ? ' disabled' : '') + '>Mulai</button>';
+    else if (s.status === 'berjalan') tombol = '<button class="tombol-utama tombol-istirahat" type="button" id="w-istirahat">Istirahat</button><button class="tombol" type="button" id="w-selesai">Selesai</button>';
+    else if (s.status === 'istirahat') tombol = '<button class="tombol-utama" type="button" id="w-lanjut">Mulai lagi</button><button class="tombol" type="button" id="w-selesai">Selesai</button>';
+  }
+  var adaDraf = f && f.idRencana === wo.ID && (f.fotoSebelum || f.fotoSesudah || f.jenis);
+  isi.innerHTML = '<button class="tombol-kembali" type="button" id="w-kembali">‹ Semua WO</button>' +
+    '<h1>' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '</h1>' + htmlPesan() +
+    '<div class="panel"><div class="tags">' + tagStatusWo(s.status) + '</div>' +
+    '<dl class="rinci"><dt>Target</dt><dd>' + esc(teksTarget(wo)) + '</dd><dt>Regu</dt><dd>' + esc(wo.REGU + (rg ? ' · ' + rg.vendor : '')) + '</dd>' +
+    (rg ? '<dt>Koordinator</dt><dd>' + esc(rg.koordinator) + ' · ' + rg.anggota.length + ' anggota</dd>' : '') +
+    (wo.KETERANGAN ? '<dt>Keterangan</dt><dd>' + esc(wo.KETERANGAN) + '</dd>' : '') + '</dl>' +
+    htmlLini(s.catatan) +
+    (s.mulai && s.mulai.hadir ? '<p class="catatan">Hadir: ' + esc(s.mulai.hadir) + (s.mulai.tidakHadir ? ' · Tidak hadir: ' + esc(s.mulai.tidakHadir) : '') + '</p>' : '') +
+    (S.absenForm ? htmlFormAbsen(wo) : '') +
+    (tombol ? '<div class="absen-tombol">' + tombol + '</div>' : '') +
+    (kunci ? '<p class="pesan pesan-info">🔒 ' + esc(wo.REGU) + ' masih mengerjakan WO ' + esc(kunci.PENYULANG + ' · ' + kunci['SECTION/SEGMEN']) + '. Tekan Selesai pada WO itu dulu.</p>' : '') +
+    (!rg && s.status === 'belum' ? '<p class="pesan pesan-galat">Regu "' + esc(wo.REGU) + '" tidak ada di daftar regu aktif. Hubungi admin.</p>' : '') +
+    (hariLain ? '<p class="catatan">WO ini dijadwalkan ' + esc(tglTampil(wo.TANGGAL)) + '.</p>' : '') +
+    (s.status === 'istirahat' && !S.absenForm ? '<p class="pesan pesan-info">Regu sedang istirahat. Tekan <b>Mulai lagi</b> untuk melanjutkan, atau <b>Selesai</b> bila pekerjaan sudah selesai.</p>' : '') +
+    (s.status === 'selesai' ? htmlRingkasWo(wo, s.gawang, 'Realisasi WO') + '<p class="catatan">WO selesai. Rinciannya ada di menu <b>Realisasi</b>.</p>' : '') +
+    (s.status === 'belum' && !S.absenForm ? '<p class="catatan">Tekan Mulai untuk konfirmasi kehadiran pelaksana. Jam &amp; GPS dicatat otomatis.</p>' : '') + '</div>' +
+    (s.status === 'berjalan' || s.status === 'istirahat' ?
+      '<h2 class="judul-bagian">Temuan inspeksi ROW (' + temuan.length + ')</h2>' +
+      (temuan.length ? temuan.map(function (t) {
+        return '<div class="kartu kartu-temuan-row"><div class="kartu-judul">' + esc(tglTampil(t['TANGGAL INSPEKSI'])) + ' · ' + esc(t.ID) + '</div>' +
+          (t['KETERANGAN'] ? '<div class="kartu-ket">' + esc(t['KETERANGAN']) + '</div>' : '') +
+          '<div class="kartu-ket">' + esc(t['RENCANA TINDAK LANJUT'] || '') + (t['KOORDINAT'] ? ' · ' + esc(t['KOORDINAT']) : '') + '</div>' +
+          htmlFotoServer(t._fotoTemuan, 'Foto temuan') +
+          (jalan ? '<button class="tombol tombol-kecil" type="button" data-real-temuan="' + esc(t.ID) + '">Input realisasi temuan ini</button>' : '') + '</div>';
+      }).join('') : '<div class="kosong-daftar">Tidak ada temuan inspeksi ROW yang belum dieksekusi di ' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '.</div>') +
+      (jalan ? '<button class="tombol tombol-lebar" type="button" id="w-luar">+ Realisasi di luar temuan inspeksi</button>' : '') +
+      (jalan && adaDraf ? '<button class="tombol tombol-lebar" type="button" id="w-draf">Lanjutkan draf realisasi</button>' : '')
+      : '') +
+    (s.status !== 'belum' ? '<h2 class="judul-bagian">Realisasi WO ini (' + rr.length + ')</h2>' + htmlTitikRealisasi(rr, false) : '');
+  pasangDetailWo(wo);
+}
+
+/** Form Mulai (konfirmasi kehadiran + alasan) atau Selesai (jumlah gawang + ringkasan). */
+function htmlFormAbsen(wo) {
+  var a = S.absenForm, r = dataRegu(wo.REGU);
+  if (a.jenis === 'MULAI') {
+    var orang = r ? [r.koordinator].concat(r.anggota) : [];
+    return '<div class="form-absen" id="f-absen"><b>Konfirmasi kehadiran pelaksana</b><p class="catatan">Centang yang hadir. Yang tidak hadir wajib diberi alasan.</p>' +
+      orang.map(function (n, i) {
+        var v = a.hadir[n], hadir = v === 'hadir';
+        return '<div class="baris-hadir"><label class="cek-hadir"><input type="checkbox" data-hadir="' + esc(n) + '"' + (hadir ? ' checked' : '') + '><span>' + esc(n) + (i === 0 ? ' <small>(koordinator)</small>' : '') + '</span></label>' +
+          (hadir ? '' : '<div class="alasan" role="radiogroup" aria-label="Alasan ' + esc(n) + ' tidak hadir">' + alasanTidakHadir().map(function (al) {
+            return '<button type="button" class="pil' + (v === al ? ' aktif' : '') + '" data-alasan="' + esc(n) + '" data-nilai="' + esc(al) + '">' + esc(al) + '</button>';
+          }).join('') + '</div>') + '</div>';
+      }).join('') +
+      '<label class="cek-hadir konfirmasi"><input type="checkbox" id="a-yakin"' + (a.yakin ? ' checked' : '') + '><span>Saya mengonfirmasi data kehadiran di atas benar.</span></label>' +
+      '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Mulai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
+  }
+  var g = a.gawang === '' || a.gawang === undefined ? '' : a.gawang;
+  return '<div class="form-absen" id="f-absen"><b>Selesai kerja</b>' + htmlRingkasWo(wo, g, 'Realisasi WO ini (sesuai input)') +
+    '<div class="medan"><label for="a-gawang">Jumlah gawang dipangkas <span class="wajib">*</span></label>' +
+    '<input id="a-gawang" type="number" min="0" step="1" inputmode="numeric" value="' + esc(g) + '" placeholder="0">' +
+    '<p class="catatan" id="a-kms">' + meterGawang() + ' m per gawang · isi 0 bila tidak ada pemangkasan</p></div>' +
+    '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Selesai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
+}
+
+async function catatAbsen(wo, jenis, tambahan) {
+  if (jenis === 'MULAI') {
+    var kunci = woBerjalanRegu(wo.REGU, wo.ID);
+    if (kunci) { S.pesan = { jenis: 'galat', teks: wo.REGU + ' masih mengerjakan WO ' + kunci.PENYULANG + ' · ' + kunci['SECTION/SEGMEN'] + '. Tekan Selesai pada WO itu dulu.' }; gambar(); return; }
+  }
+  toast('Mencari lokasi GPS…');
+  var l = await lokasiHp(20000);
+  if (!l) { S.pesan = { jenis: 'galat', teks: 'Lokasi GPS belum didapat. Aktifkan lokasi lalu coba di tempat terbuka.' }; gambar(); return; }
+  var waktu = waktuLokal(), id = 'ABS-' + waktu.slice(0, 10).replace(/-/g, '') + '-' + hex(4);
+  var item = { idAntre: id, aksi: 'absenRow', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
+    ringkasan: { judul: LABEL_ABSEN[jenis] + ' · ' + wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'], sub: wo.REGU + ' · ' + waktu.slice(11, 16) + ' · ' + l.koordinat, tanggal: waktu.slice(0, 10) },
+    muatan: Object.assign({ idKlien: id, idRencana: wo.ID, jenis: jenis, waktu: waktu, koordinat: l.koordinat, regu: wo.REGU }, tambahan || {}) };
+  try { await DB.simpan(item); } catch (e) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + e.message }; gambar(); return; }
+  await muatAntrean();
+  S.absenForm = null;
+  S.pesan = { jenis: 'ok', teks: LABEL_ABSEN[jenis] + ' tercatat ' + waktu.slice(11, 16) + ' (±' + l.akurasi + ' m).' +
+    (jenis === 'MULAI' ? ' Temuan inspeksi ROW di section ini tampil di bawah.' : jenis === 'SELESAI' ? ' WO selesai.' : '') };
+  gambar(); window.scrollTo(0, 0); kirimAntrean();
+}
+
+function bukaFormRealisasi(wo, mode, idTemuan) {
+  var f = S.drafRow, sama = f && f.idRencana === wo.ID && f.mode === mode && (f.idTemuan[0] || '') === (idTemuan || '');
+  var berisi = f && (f.fotoSebelum || f.fotoSesudah || f.fotoPengukuran);
+  if (!sama) {
+    if (berisi && !confirm('Draf realisasi sebelumnya (dengan foto) akan diganti. Lanjutkan?')) return;
+    S.drafRow = drafRowBaru(wo.ID, mode, idTemuan);
+    if (idTemuan) { var t = cariTemuan(idTemuan); if (t && t.KOORDINAT) S.drafRow.koordinat = t.KOORDINAT; }
+    simpanDrafRow();
+  }
+  S.formRow = true; S.pesan = null; gambar(); window.scrollTo(0, 0);
+}
+
+function pasangDetailWo(wo) {
+  $('#w-kembali').onclick = function () { S.wo = null; tulisLokal(KUNCI.wo, null); S.absenForm = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  if ($('#w-mulai')) $('#w-mulai').onclick = function () { S.absenForm = { jenis: 'MULAI', hadir: {}, yakin: false }; gambar(); };
+  if ($('#w-istirahat')) $('#w-istirahat').onclick = function () { catatAbsen(wo, 'ISTIRAHAT'); };
+  if ($('#w-lanjut')) $('#w-lanjut').onclick = function () { catatAbsen(wo, 'LANJUT'); };
+  if ($('#w-selesai')) $('#w-selesai').onclick = function () { S.absenForm = { jenis: 'SELESAI', gawang: '' }; gambar(); };
+  if ($('#w-luar')) $('#w-luar').onclick = function () { bukaFormRealisasi(wo, 'luar', ''); };
+  if ($('#w-draf')) $('#w-draf').onclick = function () { S.formRow = true; gambar(); window.scrollTo(0, 0); };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-real-temuan]'), function (b) {
+    b.onclick = function () { bukaFormRealisasi(wo, 'temuan', b.getAttribute('data-real-temuan')); };
+  });
+  if (!$('#f-absen')) return;
+  var a = S.absenForm;
+  Array.prototype.forEach.call(document.querySelectorAll('[data-hadir]'), function (el) {
+    el.onchange = function () { a.hadir[el.getAttribute('data-hadir')] = el.checked ? 'hadir' : undefined; gambar(); };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-alasan]'), function (el) {
+    el.onclick = function () { a.hadir[el.getAttribute('data-alasan')] = el.getAttribute('data-nilai'); gambar(); };
+  });
+  if ($('#a-yakin')) $('#a-yakin').onchange = function () { a.yakin = $('#a-yakin').checked; };
+  if ($('#a-gawang')) $('#a-gawang').oninput = function () {
+    a.gawang = $('#a-gawang').value;
+    var lama = document.querySelector('#f-absen .ringkas-realisasi'), wadah = document.createElement('div');
+    wadah.innerHTML = htmlRingkasWo(wo, a.gawang, 'Realisasi WO ini (sesuai input)');
+    if (lama) lama.parentNode.replaceChild(wadah.firstChild, lama);
+  };
+  $('#a-batal').onclick = function () { S.absenForm = null; gambar(); };
+  $('#a-simpan').onclick = function () {
+    if (a.jenis === 'MULAI') {
+      var r = dataRegu(wo.REGU), orang = r ? [r.koordinator].concat(r.anggota) : [];
+      var hadir = orang.filter(function (n) { return a.hadir[n] === 'hadir'; });
+      var tidak = orang.filter(function (n) { return a.hadir[n] !== 'hadir'; });
+      var tanpa = tidak.filter(function (n) { return !a.hadir[n]; });
+      if (!hadir.length) { toast('Centang minimal satu pelaksana yang hadir.'); return; }
+      if (tanpa.length) { toast('Pilih alasan tidak hadir untuk: ' + tanpa.join(', ')); return; }
+      if (!a.yakin) { toast('Centang konfirmasi kehadiran.'); return; }
+      catatAbsen(wo, 'MULAI', { hadir: hadir, tidakHadir: tidak.map(function (n) { return { nama: n, alasan: a.hadir[n] }; }) });
+    } else {
+      var g = a.gawang;
+      if (g === '' || !(+g >= 0) || +g !== Math.round(+g)) { toast('Isi jumlah gawang (bilangan bulat, 0 bila tidak ada).'); return; }
+      if (!confirm('Selesaikan WO ' + wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'] + ' dengan ' + g + ' gawang? Setelah Selesai, WO tidak bisa dimulai lagi.')) return;
+      catatAbsen(wo, 'SELESAI', { gawang: +g });
+    }
+  };
+}
+
+/* ----- Form realisasi (satu titik) ----- */
 function ambilIsianRow() {
   var f = S.drafRow, nilai = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : undefined; };
-  var py = nilai('r-py'); if (py !== undefined) f.penyulang = py;
-  var sec = nilai('r-sec');
-  if (sec !== undefined) { f.sectionManual = sec === '__lain'; f.section = f.sectionManual ? (nilai('r-sec-lain') || '') : sec; }
   var j = document.querySelector('input[name="r-jenis"]:checked'); if (j) f.jenis = j.value;
   var k = nilai('r-koor'); if (k !== undefined) f.koordinat = k;
   var ket = nilai('r-ket'); if (ket !== undefined) f.keterangan = ket;
   return f;
 }
 
-function gambarRowHp(isi) {
-  var d = S.dataRow, f = S.drafRow, m = (S.data && S.data.master) || { penyulang: [], keypoint: {} };
-  if (!d) {
-    isi.innerHTML = '<h1>ROW</h1>' + htmlPesan() + '<div class="panel"><p>' + (S.pesanRow ? esc(S.pesanRow) : navigator.onLine ? '<span class="putar"></span> Mengambil rencana ROW…' :
-      'Data ROW belum ada di HP ini. Sambungkan ke internet sekali.') + '</p></div>';
-    return;
-  }
-  var ab = absenHariIni(), regu = namaRegu(), rh = realisasiHariIniRow();
-  var jam = function (a) { return a ? String(a.waktu).slice(11, 16) + (a.antre ? ' (antre)' : '') : '—'; };
-  var rencana = (d.rencana || []).filter(function (r) { return r.TANGGAL === hariIni(); });
-  var milik = rencana.filter(function (r) { return r.REGU === regu; }), lain = rencana.filter(function (r) { return r.REGU !== regu; });
-  var daftarKp = (m.keypoint || {})[f.penyulang] || [];
-  var manual = f.sectionManual || (f.section && daftarKp.indexOf(f.section) === -1);
-  var opsi = function (v, pilih, label) { return '<option value="' + esc(v) + '"' + (v === pilih ? ' selected' : '') + '>' + esc(label || v) + '</option>'; };
-  var daftarPy = m.penyulang.slice(); if (f.penyulang && daftarPy.indexOf(f.penyulang) === -1) daftarPy.push(f.penyulang);
-  var ukur = (d.pilihan.pengukuran || []).indexOf(f.jenis) !== -1;
-  var siapFoto = f.penyulang && f.section;
-  var kartuRencana = function (r) {
-    var tk = r['TARGET PEMANGKASAN (KMS)'], tb = r['TARGET PENEBANGAN (BTG)'], nT = temuanRowTerbuka(r.PENYULANG, r['SECTION/SEGMEN']).length;
-    var target = [tk ? 'Pangkas ' + angkaId(tk, 2) + ' kms' : '', tb ? 'Tebang ' + tb + ' btg' : ''].filter(Boolean).join(' · ');
-    return '<button type="button" class="kartu kartu-rencana' + (f.idRencana === r.ID ? ' terpilih' : '') + '" data-rencana="' + esc(r.ID) + '">' +
-      '<div class="kartu-judul">' + esc(target || r['JENIS PEKERJAAN']) + '</div>' +
-      '<div class="kartu-ket">' + esc(r.PENYULANG + ' · ' + r['SECTION/SEGMEN']) + '</div><div class="kartu-ket">' + esc(r.REGU) + '</div>' +
-      (nT ? '<div class="tags"><span class="tag tag-belum">' + nT + ' temuan ROW belum eksekusi</span></div>' : '') + '</button>';
-  };
-  isi.innerHTML = '<h1>ROW · ' + esc(tglTampil(hariIni())) + '</h1>' +
-    '<p class="sub">Catat Mulai &amp; Selesai kerja, lalu setiap titik pemangkasan / penebangan dengan foto sebelum &amp; sesudah.</p>' + htmlPesan() +
-    '<div class="panel"><div class="medan"><label for="r-regu">Regu</label><select id="r-regu">' +
-    '<option value="">— Pilih regu —</option>' + daftarRegu().map(function (r) { return '<option value="' + esc(r.nama) + '"' + (r.nama === regu ? ' selected' : '') + '>' + esc(r.nama + ' · ' + r.vendor) + '</option>'; }).join('') +
-    '</select>' + (dataRegu(regu) ? '<p class="catatan">Koordinator ' + esc(dataRegu(regu).koordinator) + ' · ' + dataRegu(regu).anggota.length + ' anggota</p>' :
-      '<p class="catatan">' + (daftarRegu().length ? 'Pilih regu sebelum Mulai kerja.' : 'Belum ada regu terdaftar — admin menambahkannya di dashboard (form rencana ROW).') + '</p>') + '</div>' +
-    (S.absenForm ? htmlFormAbsen() : '') +
-    '<div class="absen-baris"><div><small>Mulai</small><b>' + jam(ab.MULAI) + '</b></div><div><small>Selesai</small><b>' + jam(ab.SELESAI) + '</b></div>' +
-    '<div><small>Realisasi hari ini</small><b>' + (rh.server + rh.antre) + '</b></div></div>' +
-    (S.absenForm ? '' : '<div class="absen-tombol"><button class="tombol-utama" type="button" id="r-mulai"' + (ab.MULAI || !regu ? ' disabled' : '') + '>' + (ab.MULAI ? 'Sudah mulai' : 'Mulai kerja') + '</button>' +
-    '<button class="tombol" type="button" id="r-selesai"' + (!ab.MULAI ? ' disabled' : '') + '>' + (ab.SELESAI ? 'Selesai lagi' : 'Selesai kerja') + '</button></div>' +
-    '<p class="catatan">Mulai: konfirmasi kehadiran pelaksana. Selesai: isi jumlah gawang dipangkas. Jam &amp; GPS dicatat otomatis.</p>') +
-    (ab.SELESAI && !S.absenForm ? htmlRingkasRealisasi(ab.SELESAI.gawang, 'Realisasi hari ini') : '') + '</div>' +
-    '<h2 class="judul-bagian">Rencana kerja hari ini</h2>' +
-    (milik.length || lain.length ? milik.map(kartuRencana).join('') + (lain.length ? '<details class="lainnya"><summary>Rencana regu lain (' + lain.length + ')</summary>' + lain.map(kartuRencana).join('') + '</details>' : '')
-      : '<div class="kosong-daftar">Belum ada rencana untuk hari ini.</div>') +
-    '<p class="catatan">Ketuk rencana untuk mengisi penyulang, section, dan jenis pekerjaan.</p>' +
-    '<h2 class="judul-bagian">Input realisasi</h2>' +
+function gambarFormRealisasi(isi, wo) {
+  var d = S.dataRow, f = S.drafRow, ukur = apakahTebang(f.jenis), t = f.mode === 'temuan' ? cariTemuan(f.idTemuan[0]) : null;
+  isi.innerHTML = '<button class="tombol-kembali" type="button" id="r-kembali">‹ Kembali ke WO</button>' +
+    '<h1>Input realisasi</h1><p class="sub">' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'] + ' · ' + wo.REGU) + '</p>' + htmlPesan() +
+    (t ? '<div class="temuan-row"><b>Menyelesaikan temuan inspeksi</b><div class="kartu-ket">' + esc(tglTampil(t['TANGGAL INSPEKSI'])) + ' · ' + esc(t.ID) + '</div>' +
+      (t.KETERANGAN ? '<div class="kartu-ket">' + esc(t.KETERANGAN) + '</div>' : '') + htmlFotoServer(t._fotoTemuan, 'Foto temuan') +
+      '<p class="catatan">Saat realisasi terkirim, temuan ini otomatis menjadi Sudah Eksekusi dengan foto sesudah.</p></div>'
+      : f.mode === 'temuan' ? '<p class="pesan pesan-info">Temuan ini sudah ditutup / tidak lagi terbuka. Realisasi tetap bisa disimpan.</p>'
+      : '<p class="pesan pesan-info">Realisasi di luar temuan inspeksi.</p>') +
     '<form id="f-row" class="panel" novalidate>' +
-    '<div class="medan"><label for="r-py">Penyulang <span class="wajib">*</span></label><select id="r-py">' +
-    opsi('', f.penyulang, '— Pilih penyulang —') + daftarPy.map(function (v) { return opsi(v, f.penyulang); }).join('') + '</select></div>' +
-    '<div class="medan"><label for="r-sec">Section / segmen <span class="wajib">*</span></label><select id="r-sec"' + (f.penyulang ? '' : ' disabled') + '>' +
-    opsi('', manual ? '__lain' : f.section, f.penyulang ? '— Pilih section / segmen —' : '— Pilih penyulang dulu —') +
-    daftarKp.map(function (v) { return opsi(v, manual ? '' : f.section); }).join('') +
-    (f.penyulang ? opsi('__lain', manual ? '__lain' : '', 'Lainnya (ketik manual)…') : '') + '</select>' +
-    (manual && f.penyulang ? '<input id="r-sec-lain" type="text" value="' + esc(f.section) + '" placeholder="Ketik nama section / segmen">' : '') + '</div>' +
-    htmlTemuanRow(f) +
     '<div class="medan"><span class="label">Jenis pekerjaan <span class="wajib">*</span></span>' + radio('r-jenis', d.pilihan.jenis, f.jenis) + '</div>' +
-    (siapFoto ? htmlFoto('r-f1', 'Foto sebelum', true, f.fotoSebelum) + htmlFoto('r-f2', 'Foto sesudah', true, f.fotoSesudah) +
-      (ukur ? htmlFoto('r-f3', 'Foto pengukuran batang', true, f.fotoPengukuran) : '')
-      : '<p class="pesan pesan-info">Pilih penyulang dan section dulu — namanya ikut dicetak di foto.</p>') +
+    htmlFoto('r-f1', 'Foto sebelum', true, f.fotoSebelum) + htmlFoto('r-f2', 'Foto sesudah', true, f.fotoSesudah) +
+    (ukur ? htmlFoto('r-f3', 'Foto pengukuran batang', true, f.fotoPengukuran) : '') +
     '<div class="medan"><label for="r-koor">Titik koordinat <span class="wajib">*</span></label><div class="baris-isian"><input id="r-koor" type="text" inputmode="decimal" value="' + esc(f.koordinat) + '" placeholder="-3.123456, 121.123456">' +
     '<button class="tombol" type="button" id="r-gps">Lokasi saya</button></div><p class="catatan">Terisi otomatis dari foto sesudah.</p></div>' +
     '<div class="medan"><label for="r-ket">Keterangan</label><textarea id="r-ket" placeholder="mis. jenis pohon, jumlah, kondisi…">' + esc(f.keterangan) + '</textarea></div>' +
-    '<button class="tombol-utama" type="submit">Simpan realisasi</button>' +
-    '<button class="tombol tombol-kecil" type="button" id="r-kosong" style="width:100%;margin-top:8px">Kosongkan form</button></form>';
-  pasangRowHp();
+    '<button class="tombol-utama" type="submit">Simpan realisasi</button></form>';
+  pasangFormRealisasi(wo);
 }
 
-/** Form Mulai (konfirmasi kehadiran) atau Selesai (jumlah gawang), tampil di panel regu. */
-function htmlFormAbsen() {
-  var a = S.absenForm, r = dataRegu(namaRegu());
-  if (a.jenis === 'MULAI') {
-    var orang = r ? [r.koordinator].concat(r.anggota) : [];
-    return '<div class="form-absen" id="f-absen">' + htmlRencanaKerja() + '<b>Konfirmasi kehadiran pelaksana</b><p class="catatan">Centang yang hadir hari ini.</p>' +
-      orang.map(function (n, i) {
-        return '<label class="cek-hadir"><input type="checkbox" data-hadir="' + esc(n) + '"' + (a.hadir[n] ? ' checked' : '') + '><span>' + esc(n) + (i === 0 ? ' <small>(koordinator)</small>' : '') + '</span></label>';
-      }).join('') +
-      '<label class="cek-hadir konfirmasi"><input type="checkbox" id="a-yakin"' + (a.yakin ? ' checked' : '') + '><span>Saya mengonfirmasi data kehadiran di atas benar.</span></label>' +
-      '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Konfirmasi &amp; Mulai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
-  }
-  var g = a.gawang === '' || a.gawang === undefined ? '' : a.gawang;
-  return '<div class="form-absen" id="f-absen"><b>Selesai kerja</b>' + htmlRingkasRealisasi(g, 'Realisasi hari ini (sesuai input)') + '<div class="medan"><label for="a-gawang">Jumlah gawang dipangkas hari ini <span class="wajib">*</span></label>' +
-    '<input id="a-gawang" type="number" min="0" step="1" inputmode="numeric" value="' + esc(g) + '" placeholder="0">' +
-    '<p class="catatan" id="a-kms">' + (g !== '' ? '= ' + angkaId(g * meterGawang() / 1000, 2) + ' kms (' + meterGawang() + ' m per gawang)' : meterGawang() + ' m per gawang') + '</p></div>' +
-    '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Simpan Selesai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
-}
-
-async function catatAbsen(jenis, tambahan) {
-  var regu = namaRegu();
-  if (!regu) { S.pesan = { jenis: 'galat', teks: 'Pilih regu dulu.' }; gambar(); return; }
-  toast('Mencari lokasi GPS…');
-  var l = await lokasiHp(20000);
-  if (!l) { S.pesan = { jenis: 'galat', teks: 'Lokasi GPS belum didapat. Aktifkan lokasi lalu coba di tempat terbuka.' }; gambar(); return; }
-  var waktu = waktuLokal(), id = 'ABS-' + waktu.slice(0, 10).replace(/-/g, '') + '-' + hex(4);
-  var item = { idAntre: id, aksi: 'absenRow', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
-    ringkasan: { judul: (jenis === 'MULAI' ? 'Mulai kerja' : 'Selesai kerja') + ' · ' + regu, sub: waktu.slice(11, 16) + ' · ' + l.koordinat, tanggal: waktu.slice(0, 10) },
-    muatan: Object.assign({ idKlien: id, jenis: jenis, waktu: waktu, koordinat: l.koordinat, regu: regu }, tambahan || {}) };
-  try { await DB.simpan(item); } catch (e) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + e.message }; gambar(); return; }
-  await muatAntrean();
-  S.absenForm = null;
-  S.pesan = { jenis: 'ok', teks: (jenis === 'MULAI' ? 'Mulai kerja' : 'Selesai kerja') + ' tercatat ' + waktu.slice(11, 16) + ' (±' + l.akurasi + ' m).' };
-  gambar(); kirimAntrean();
-}
-
-function pasangRowHp() {
+function pasangFormRealisasi(wo) {
   var f = S.drafRow, ulang = function () { ambilIsianRow(); simpanDrafRow(); gambar(); };
-  $('#r-regu').onchange = function () { var v = $('#r-regu').value; tulisLokal(KUNCI.regu, v || null); S.absenForm = null; gambar(); };
-  if ($('#r-mulai')) $('#r-mulai').onclick = function () { S.absenForm = { jenis: 'MULAI', hadir: {}, yakin: false }; gambar(); };
-  if ($('#r-selesai')) $('#r-selesai').onclick = function () { S.absenForm = { jenis: 'SELESAI', gawang: '' }; gambar(); };
-  if ($('#f-absen')) {
-    var a = S.absenForm;
-    Array.prototype.forEach.call(document.querySelectorAll('[data-hadir]'), function (el) { el.onchange = function () { a.hadir[el.getAttribute('data-hadir')] = el.checked; }; });
-    if ($('#a-yakin')) $('#a-yakin').onchange = function () { a.yakin = $('#a-yakin').checked; };
-    if ($('#a-gawang')) $('#a-gawang').oninput = function () {
-      a.gawang = $('#a-gawang').value;
-      $('#a-kms').textContent = a.gawang !== '' ? '= ' + angkaId(a.gawang * meterGawang() / 1000, 2) + ' kms (' + meterGawang() + ' m per gawang)' : meterGawang() + ' m per gawang';
-      var lama = document.querySelector('.ringkas-realisasi'), baru = document.createElement('div');
-      if (lama) { baru.innerHTML = htmlRingkasRealisasi(a.gawang, 'Realisasi hari ini (sesuai input)'); lama.parentNode.replaceChild(baru.firstChild, lama); }
-    };
-    $('#a-batal').onclick = function () { S.absenForm = null; gambar(); };
-    $('#a-simpan').onclick = function () {
-      if (a.jenis === 'MULAI') {
-        var r = dataRegu(namaRegu()), orang = r ? [r.koordinator].concat(r.anggota) : [];
-        var hadir = orang.filter(function (n) { return a.hadir[n]; }), tidak = orang.filter(function (n) { return !a.hadir[n]; });
-        if (!hadir.length) { toast('Centang minimal satu pelaksana yang hadir.'); return; }
-        if (!a.yakin) { toast('Centang konfirmasi kehadiran.'); return; }
-        catatAbsen('MULAI', { hadir: hadir, tidakHadir: tidak });
-      } else {
-        var g = a.gawang;
-        if (g === '' || !(+g >= 0) || +g !== Math.round(+g)) { toast('Isi jumlah gawang (bilangan bulat, 0 bila tidak ada).'); return; }
-        catatAbsen('SELESAI', { gawang: +g });
-      }
-    };
-  }
-  Array.prototype.forEach.call(document.querySelectorAll('[data-rencana]'), function (b) {
-    b.onclick = function () {
-      var r = S.dataRow.rencana.filter(function (x) { return x.ID === b.getAttribute('data-rencana'); })[0]; if (!r) return;
-      ambilIsianRow();
-      f.idRencana = f.idRencana === r.ID ? '' : r.ID;
-      if (f.idRencana) {
-        f.penyulang = r.PENYULANG; f.section = r['SECTION/SEGMEN']; f.sectionManual = false;
-        if ((S.dataRow.pilihan.jenis || []).indexOf(r['JENIS PEKERJAAN']) !== -1) f.jenis = r['JENIS PEKERJAAN'];
-      }
-      simpanDrafRow(); gambar();
-      var form = $('#f-row'); if (form && f.idRencana) form.scrollIntoView({ block: 'start' });
-    };
-  });
+  $('#r-kembali').onclick = function () { ambilIsianRow(); simpanDrafRow(); S.formRow = false; S.pesan = null; gambar(); window.scrollTo(0, 0); };
   $('#f-row').addEventListener('change', function () { ambilIsianRow(); simpanDrafRow(); });
-  $('#r-py').onchange = function () { ambilIsianRow(); f.section = ''; f.sectionManual = false; f.idRencana = ''; f.idTemuan = []; simpanDrafRow(); gambar(); };
-  Array.prototype.forEach.call(document.querySelectorAll('[data-temuan]'), function (el) {
-    el.onchange = function () {
-      var id = el.getAttribute('data-temuan'); f.idTemuan = (f.idTemuan || []).filter(function (x) { return x !== id; });
-      if (el.checked) f.idTemuan.push(id);
-      simpanDrafRow();
-    };
-  });
-  pasangFotoServer();
-  $('#r-sec').onchange = function () { var lain = $('#r-sec').value === '__lain'; f.idTemuan = []; ulang(); if (lain && $('#r-sec-lain')) $('#r-sec-lain').focus(); };
   Array.prototype.forEach.call(document.querySelectorAll('input[name="r-jenis"]'), function (el) { el.onchange = ulang; });
-  var lokasiTeks = function () { return f.penyulang + ' · ' + f.section; };
-  pasangFoto('r-f1', function (foto) { ambilIsianRow(); f.fotoSebelum = foto; simpanDrafRow(); gambar(); }, 'MOTAHA ROW · ULP Kolaka Utara', lokasiTeks());
+  var lokasiTeks = wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'];
+  pasangFoto('r-f1', function (foto) { ambilIsianRow(); f.fotoSebelum = foto; simpanDrafRow(); gambar(); }, 'MOTAHA ROW · ULP Kolaka Utara', lokasiTeks);
   pasangFoto('r-f2', function (foto) {
     ambilIsianRow(); f.fotoSesudah = foto;
     if (foto.koordinat) { f.koordinat = foto.koordinat; toast('Koordinat diisi dari foto sesudah.'); }
     simpanDrafRow(); gambar();
-  }, 'MOTAHA ROW · ULP Kolaka Utara', lokasiTeks());
-  pasangFoto('r-f3', function (foto) { ambilIsianRow(); f.fotoPengukuran = foto; simpanDrafRow(); gambar(); }, 'MOTAHA ROW · Pengukuran batang', lokasiTeks());
+  }, 'MOTAHA ROW · ULP Kolaka Utara', lokasiTeks);
+  pasangFoto('r-f3', function (foto) { ambilIsianRow(); f.fotoPengukuran = foto; simpanDrafRow(); gambar(); }, 'MOTAHA ROW · Pengukuran batang', lokasiTeks);
   $('#r-gps').onclick = function () { ambilLokasi(function (k, ak) { ambilIsianRow(); f.koordinat = k; simpanDrafRow(); gambar(); toast('Lokasi didapat (±' + ak + ' m).'); }); };
-  $('#r-kosong').onclick = function () { if (!confirm('Kosongkan form realisasi?')) return; S.drafRow = drafRowBaru(); simpanDrafRow(); gambar(); };
   $('#f-row').onsubmit = async function (e) {
     e.preventDefault();
     ambilIsianRow();
-    var ukur = (S.dataRow.pilihan.pengukuran || []).indexOf(f.jenis) !== -1;
-    var salah = !namaRegu() ? 'Pilih regu dulu (di bagian atas).' : !f.penyulang ? 'Pilih penyulang.' : !f.section ? 'Section/segmen wajib diisi.' : !f.jenis ? 'Pilih jenis pekerjaan.' :
-      !f.fotoSebelum ? 'Foto sebelum wajib dilampirkan.' : !f.fotoSesudah ? 'Foto sesudah wajib dilampirkan.' :
+    var ukur = apakahTebang(f.jenis), st = statusWo(wo.ID).status;
+    var salah = st !== 'berjalan' ? (st === 'istirahat' ? 'Regu sedang istirahat — tekan Mulai lagi dulu.' : 'WO ini tidak sedang berjalan.') :
+      !f.jenis ? 'Pilih jenis pekerjaan.' : !f.fotoSebelum ? 'Foto sebelum wajib dilampirkan.' : !f.fotoSesudah ? 'Foto sesudah wajib dilampirkan.' :
       ukur && !f.fotoPengukuran ? 'Penebangan: foto pengukuran batang wajib dilampirkan.' :
       !koordinatSah(f.koordinat) ? 'Titik koordinat wajib (tekan Lokasi saya).' : '';
     if (salah) { S.pesan = { jenis: 'galat', teks: salah }; gambar(); window.scrollTo(0, 0); return; }
+    var terbuka = temuanRowTerbuka(wo.PENYULANG, wo['SECTION/SEGMEN']).map(function (t) { return t.ID; });
+    var idTemuan = (f.idTemuan || []).filter(function (id) { return terbuka.indexOf(id) !== -1; });
     var waktu = waktuLokal(), id = 'ROW-' + waktu.slice(0, 10).replace(/-/g, '') + '-' + hex(4);
     var item = { idAntre: id, aksi: 'simpanRealisasiRow', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
-      ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + ' · ROW · ' + waktu.slice(11, 16) + ((f.idTemuan || []).length ? ' · menutup ' + f.idTemuan.length + ' temuan' : ''), tanggal: waktu.slice(0, 10) },
-      muatan: { idKlien: id, waktu: waktu, penyulang: f.penyulang, section: f.section, jenis: f.jenis, koordinat: f.koordinat, keterangan: f.keterangan,
-        regu: namaRegu(), idRencana: f.idRencana,
-        idTemuan: temuanRowTerbuka(f.penyulang, f.section).map(function (t) { return t.ID; }).filter(function (id) { return (f.idTemuan || []).indexOf(id) !== -1; }),
+      ringkasan: { judul: wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'], sub: f.jenis + ' · ROW · ' + waktu.slice(11, 16) + (idTemuan.length ? ' · menutup temuan ' + idTemuan.join(', ') : ''), tanggal: waktu.slice(0, 10) },
+      muatan: { idKlien: id, waktu: waktu, penyulang: wo.PENYULANG, section: wo['SECTION/SEGMEN'], jenis: f.jenis, koordinat: f.koordinat, keterangan: f.keterangan,
+        regu: wo.REGU, idRencana: wo.ID, idTemuan: idTemuan,
         fotoSebelum: { mime: f.fotoSebelum.mime, data: f.fotoSebelum.data }, fotoSesudah: { mime: f.fotoSesudah.mime, data: f.fotoSesudah.data },
         fotoPengukuran: ukur ? { mime: f.fotoPengukuran.mime, data: f.fotoPengukuran.data } : null } };
     try { await DB.simpan(item); } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }
-    S.drafRow = drafRowBaru(f); simpanDrafRow();
+    S.drafRow = drafRowBaru(); simpanDrafRow(); S.formRow = false;
     await muatAntrean();
-    S.pesan = { jenis: 'ok', teks: navigator.onLine ? 'Realisasi tersimpan dan sedang dikirim.' : 'Realisasi tersimpan di HP. Dikirim otomatis saat ada sinyal.' };
+    S.pesan = { jenis: 'ok', teks: (navigator.onLine ? 'Realisasi tersimpan dan sedang dikirim.' : 'Realisasi tersimpan di HP. Dikirim otomatis saat ada sinyal.') +
+      (idTemuan.length ? ' Temuan ' + idTemuan.join(', ') + ' ikut ditutup.' : '') };
     gambar(); window.scrollTo(0, 0);
     kirimAntrean();
   };
+}
+
+/* ----- Menu Realisasi: WO yang sudah Selesai (7 hari terakhir) ----- */
+function gambarRealisasiHp(isi) {
+  var d = S.dataRow;
+  if (!d) { isi.innerHTML = '<h1>Realisasi</h1><div class="panel"><p>' + (navigator.onLine ? '<span class="putar"></span> Mengambil data ROW…' : 'Data ROW belum ada di HP ini. Sambungkan ke internet sekali.') + '</p></div>'; return; }
+  var semua = absenSemua();
+  var selesai = (d.rencana || []).map(function (r) { return { wo: r, st: statusWo(r.ID, semua) }; }).filter(function (x) { return x.st.status === 'selesai'; })
+    .sort(function (a, b) { return String(b.st.selesai.waktu) < String(a.st.selesai.waktu) ? -1 : 1; });
+  var reguAda = {}; selesai.forEach(function (x) { reguAda[x.wo.REGU] = 1; });
+  var saring = S.saringRegu && reguAda[S.saringRegu] ? S.saringRegu : '';
+  var detail = S.detailReal ? selesai.filter(function (x) { return x.wo.ID === S.detailReal; })[0] : null;
+  if (detail) {
+    var wo = detail.wo, s = detail.st, rg = dataRegu(wo.REGU);
+    isi.innerHTML = '<button class="tombol-kembali" type="button" id="rl-kembali">‹ Semua realisasi</button>' +
+      '<h1>' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '</h1><p class="sub">' + esc(tglTampil(wo.TANGGAL) + ' · ' + wo.REGU + (rg ? ' · ' + rg.vendor : '')) + '</p>' +
+      '<div class="panel">' + htmlLini(s.catatan) +
+      (s.mulai && s.mulai.hadir ? '<p class="catatan">Hadir: ' + esc(s.mulai.hadir) + (s.mulai.tidakHadir ? ' · Tidak hadir: ' + esc(s.mulai.tidakHadir) : '') + '</p>' : '') +
+      htmlRingkasWo(wo, s.gawang, 'Realisasi vs target (' + esc(teksTarget(wo)) + ')') + '</div>' +
+      '<h2 class="judul-bagian">Titik realisasi</h2>' + htmlTitikRealisasi(realisasiWo(wo.ID), true);
+    $('#rl-kembali').onclick = function () { S.detailReal = null; gambar(); window.scrollTo(0, 0); };
+    pasangFotoServer();
+    return;
+  }
+  var tampil = selesai.filter(function (x) { return !saring || x.wo.REGU === saring; });
+  isi.innerHTML = '<h1>Realisasi</h1><p class="sub">Pekerjaan ROW yang sudah Selesai, 7 hari terakhir.</p>' +
+    (Object.keys(reguAda).length > 1 ? '<div class="medan"><select id="rl-regu"><option value="">Semua regu</option>' + Object.keys(reguAda).sort().map(function (n) {
+      return '<option value="' + esc(n) + '"' + (n === saring ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></div>' : '') +
+    (tampil.length ? tampil.map(function (x) {
+      var wo = x.wo, rr = realisasiWo(wo.ID), nTebang = rr.filter(function (r) { return apakahTebang(r.jenis); }).length;
+      var kms = x.st.gawang !== '' && x.st.gawang !== undefined && x.st.gawang !== null ? angkaId(+x.st.gawang * meterGawang() / 1000, 2) + ' kms' : '—';
+      return '<button type="button" class="kartu kartu-rencana" data-real="' + esc(wo.ID) + '">' +
+        '<div class="kartu-judul">' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '</div>' +
+        '<div class="kartu-ket">' + esc(tglTampil(wo.TANGGAL)) + ' · ' + esc(jamDari(x.st.mulai && x.st.mulai.waktu) + '–' + jamDari(x.st.selesai.waktu)) + ' · ' + esc(wo.REGU) + '</div>' +
+        '<div class="tags"><span class="tag tag-sudah">Pangkas ' + kms + '</span><span class="tag tag-sudah">Tebang ' + nTebang + ' btg</span><span class="tag">' + rr.length + ' titik</span>' +
+        (x.st.selesai.antre ? '<span class="tag tag-tunggu">Belum terkirim</span>' : '') + '</div></button>';
+    }).join('') : '<div class="kosong-daftar">Belum ada WO yang selesai dalam 7 hari terakhir.</div>');
+  if ($('#rl-regu')) $('#rl-regu').onchange = function () { S.saringRegu = $('#rl-regu').value; gambar(); };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-real]'), function (b) {
+    b.onclick = function () { S.detailReal = b.getAttribute('data-real'); gambar(); window.scrollTo(0, 0); };
+  });
 }
 
 /* ---------- Antrean ---------- */
@@ -1182,7 +1294,8 @@ async function mulai() {
   try { S.draf = (await DB.ambil('draf')) || null; } catch (e) { S.draf = null; }
   if (!S.draf) S.draf = drafBaru();
   try { S.drafRow = (await DB.ambil('drafRow')) || null; } catch (e) { S.drafRow = null; }
-  if (!S.drafRow) S.drafRow = drafRowBaru();
+  if (!S.drafRow || S.drafRow.mode === undefined) S.drafRow = drafRowBaru(); // draf format lama (sebelum alur WO) dibuang
+  S.wo = bacaLokal(KUNCI.wo);
   await muatAntrean();
   gambar();
   if (S.sesi && !S.sesi.habis && navigator.onLine) { muatData(!!S.data); kirimAntrean(); }
