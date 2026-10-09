@@ -6,8 +6,8 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-09.8';
-var VERSI_SERVER_MIN = '2026-10-09.8'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
+var VERSI_PWA = '2026-10-09.9';
+var VERSI_SERVER_MIN = '2026-10-09.9'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -787,9 +787,9 @@ function simpanDrafRow() { DB.taruh('drafRow', S.drafRow).catch(function () {});
 /** Mulai/Selesai hari ini milik regu ini: dari server + yang masih di antrean. */
 function absenHariIni() {
   var t = hariIni(), regu = namaRegu(), hasil = { MULAI: null, SELESAI: null };
-  var semua = ((S.dataRow && S.dataRow.absen) || []).map(function (a) { return { jenis: a.JENIS, waktu: a.WAKTU, regu: a.REGU, tanggal: a.TANGGAL }; })
+  var semua = ((S.dataRow && S.dataRow.absen) || []).map(function (a) { return { jenis: a.JENIS, waktu: a.WAKTU, regu: a.REGU, tanggal: a.TANGGAL, gawang: a.GAWANG }; })
     .concat(S.antrean.filter(function (x) { return x.aksi === 'absenRow'; }).map(function (x) {
-      return { jenis: x.muatan.jenis, waktu: x.muatan.waktu, regu: x.muatan.regu, tanggal: x.muatan.waktu.slice(0, 10), antre: true };
+      return { jenis: x.muatan.jenis, waktu: x.muatan.waktu, regu: x.muatan.regu, tanggal: x.muatan.waktu.slice(0, 10), gawang: x.muatan.gawang, antre: true };
     }));
   semua.forEach(function (a) {
     if (a.tanggal !== t || a.regu !== regu) return;
@@ -832,11 +832,72 @@ function htmlTemuanRow(f) {
     }).join('') + '</div>';
 }
 
+/** Rencana kerja hari ini yang dijadwalkan untuk regu terpilih. */
+function rencanaReguHari() {
+  var t = hariIni(), regu = namaRegu();
+  return ((S.dataRow && S.dataRow.rencana) || []).filter(function (r) { return r.TANGGAL === t && regu && r.REGU === regu; });
+}
+
+/** Realisasi hari ini milik regu terpilih: dari server + yang masih di antrean (tanpa ganda). */
+function realisasiReguHari() {
+  var t = hariIni(), regu = namaRegu(), ada = {};
+  if (!regu) return [];
+  var antre = S.antrean.filter(function (x) { return x.aksi === 'simpanRealisasiRow' && x.muatan.waktu.slice(0, 10) === t && x.muatan.regu === regu; })
+    .map(function (x) {
+      ada[String(x.muatan.idKlien).toUpperCase()] = 1;
+      return { jenis: x.muatan.jenis, penyulang: x.muatan.penyulang, section: x.muatan.section, waktu: x.muatan.waktu, idRencana: x.muatan.idRencana, antre: true };
+    });
+  var server = ((S.dataRow && S.dataRow.realisasi) || []).filter(function (x) { return x.TANGGAL === t && x.REGU === regu && !ada[String(x.ID).toUpperCase()]; })
+    .map(function (x) { return { jenis: x['JENIS PEKERJAAN'], penyulang: x.PENYULANG, section: x['SECTION/SEGMEN'], waktu: x.WAKTU, idRencana: x['ID RENCANA'] }; });
+  return server.concat(antre).sort(function (a, b) { return String(a.waktu) < String(b.waktu) ? -1 : 1; });
+}
+
 function realisasiHariIniRow() {
-  var t = hariIni();
-  var server = ((S.dataRow && S.dataRow.realisasi) || []).filter(function (x) { return x.TANGGAL === t; }).length;
-  var antre = S.antrean.filter(function (x) { return x.aksi === 'simpanRealisasiRow' && x.muatan.waktu.slice(0, 10) === t; }).length;
-  return { server: server, antre: antre };
+  var r = realisasiReguHari();
+  return { server: r.filter(function (x) { return !x.antre; }).length, antre: r.filter(function (x) { return x.antre; }).length };
+}
+
+function apakahTebang(jenis) { return ((S.dataRow && S.dataRow.pilihan.pengukuran) || []).indexOf(jenis) !== -1; }
+
+/** Daftar rencana kerja regu hari ini (dipakai di form Mulai). */
+function htmlRencanaKerja() {
+  var ren = rencanaReguHari();
+  if (!ren.length) return '<div class="rencana-kerja kosong"><b>Rencana kerja hari ini</b><p class="catatan">Belum ada pekerjaan yang dijadwalkan untuk ' + esc(namaRegu() || 'regu ini') + ' hari ini. Hubungi admin bila seharusnya ada.</p></div>';
+  return '<div class="rencana-kerja"><b>Rencana kerja hari ini (' + ren.length + ')</b>' + ren.map(function (r) {
+    var tk = r['TARGET PEMANGKASAN (KMS)'], tb = r['TARGET PENEBANGAN (BTG)'];
+    return '<div class="rk-item"><div><b>' + esc(r.PENYULANG) + '</b> · ' + esc(r['SECTION/SEGMEN']) + '</div><small>' +
+      esc([r['JENIS PEKERJAAN'], tk ? 'target pangkas ' + angkaId(tk, 2) + ' kms' : '', tb ? 'target tebang ' + tb + ' btg' : ''].filter(Boolean).join(' · ')) +
+      (r.KETERANGAN ? ' · ' + esc(r.KETERANGAN) : '') + '</small></div>';
+  }).join('') + '</div>';
+}
+
+/**
+ * Ringkasan realisasi hari ini regu terpilih (dipakai di form Selesai & setelah Selesai).
+ * gawang: angka atau '' (belum diisi). Pemangkasan kms = gawang × meter/gawang; penebangan = jumlah titik penebangan.
+ */
+function htmlRingkasRealisasi(gawang, judul) {
+  var rr = realisasiReguHari(), ren = rencanaReguHari(), kunci = function (p, s) { return p + ' · ' + s; };
+  var tKms = ren.reduce(function (a, r) { return a + (+r['TARGET PEMANGKASAN (KMS)'] || 0); }, 0);
+  var tBtg = ren.reduce(function (a, r) { return a + (+r['TARGET PENEBANGAN (BTG)'] || 0); }, 0);
+  var per = {}, urut = [];
+  var tambah = function (p, s, dijadwal) { var k = kunci(p, s); if (!per[k]) { per[k] = { nama: k, pangkas: 0, tebang: 0, jadwal: false }; urut.push(k); } if (dijadwal) per[k].jadwal = true; return per[k]; };
+  ren.forEach(function (r) { tambah(r.PENYULANG, r['SECTION/SEGMEN'], true); });
+  rr.forEach(function (x) { var o = tambah(x.penyulang, x.section, false); if (apakahTebang(x.jenis)) o.tebang++; else o.pangkas++; });
+  var nPangkas = rr.filter(function (x) { return !apakahTebang(x.jenis); }).length, nBtg = rr.length - nPangkas;
+  var adaGawang = gawang !== '' && gawang !== null && gawang !== undefined && isFinite(+gawang);
+  var kms = adaGawang ? +gawang * meterGawang() / 1000 : null;
+  var persen = function (n, t) { return t ? ' (' + Math.round(n / t * 100) + '%)' : ''; };
+  return '<div class="ringkas-realisasi"><b>' + esc(judul || 'Realisasi hari ini') + '</b>' +
+    '<div class="rr-angka"><div><small>Pemangkasan</small><b id="rr-kms">' + (kms === null ? '—' : angkaId(kms, 2) + ' kms') + '</b>' +
+    '<small id="rr-kms-ket">' + (kms === null ? 'isi jumlah gawang' : angkaId(+gawang) + ' gawang') + (tKms ? ' · target ' + angkaId(tKms, 2) + ' kms' : '') +
+    '<span id="rr-kms-persen">' + (kms === null ? '' : persen(kms, tKms)) + '</span></small></div>' +
+    '<div><small>Penebangan</small><b>' + nBtg + ' btg</b><small>' + (tBtg ? 'target ' + tBtg + ' btg' + persen(nBtg, tBtg) : 'tanpa target') + '</small></div>' +
+    '<div><small>Titik pangkas</small><b>' + nPangkas + '</b><small>titik foto</small></div></div>' +
+    (urut.length ? '<div class="rr-rinci">' + urut.map(function (k) {
+      var o = per[k], isi = [o.pangkas ? o.pangkas + ' titik pangkas' : '', o.tebang ? o.tebang + ' btg tebang' : ''].filter(Boolean).join(' · ');
+      return '<div class="rr-baris' + (isi ? '' : ' kosong') + '"><span>' + esc(o.nama) + (o.jadwal ? '' : ' <small>(di luar rencana)</small>') + '</span><span>' + (isi || 'belum ada realisasi') + '</span></div>';
+    }).join('') + '</div>' : '<p class="catatan">Belum ada realisasi yang diinput hari ini.</p>') +
+    (rr.some(function (x) { return x.antre; }) ? '<p class="catatan">Sebagian realisasi masih di antrean HP — ikut dihitung.</p>' : '') + '</div>';
 }
 
 function ambilIsianRow() {
@@ -886,8 +947,9 @@ function gambarRowHp(isi) {
     '<div><small>Realisasi hari ini</small><b>' + (rh.server + rh.antre) + '</b></div></div>' +
     (S.absenForm ? '' : '<div class="absen-tombol"><button class="tombol-utama" type="button" id="r-mulai"' + (ab.MULAI || !regu ? ' disabled' : '') + '>' + (ab.MULAI ? 'Sudah mulai' : 'Mulai kerja') + '</button>' +
     '<button class="tombol" type="button" id="r-selesai"' + (!ab.MULAI ? ' disabled' : '') + '>' + (ab.SELESAI ? 'Selesai lagi' : 'Selesai kerja') + '</button></div>' +
-    '<p class="catatan">Mulai: konfirmasi kehadiran pelaksana. Selesai: isi jumlah gawang dipangkas. Jam &amp; GPS dicatat otomatis.</p>') + '</div>' +
-    '<h2 class="judul-bagian">Rencana hari ini</h2>' +
+    '<p class="catatan">Mulai: konfirmasi kehadiran pelaksana. Selesai: isi jumlah gawang dipangkas. Jam &amp; GPS dicatat otomatis.</p>') +
+    (ab.SELESAI && !S.absenForm ? htmlRingkasRealisasi(ab.SELESAI.gawang, 'Realisasi hari ini') : '') + '</div>' +
+    '<h2 class="judul-bagian">Rencana kerja hari ini</h2>' +
     (milik.length || lain.length ? milik.map(kartuRencana).join('') + (lain.length ? '<details class="lainnya"><summary>Rencana regu lain (' + lain.length + ')</summary>' + lain.map(kartuRencana).join('') + '</details>' : '')
       : '<div class="kosong-daftar">Belum ada rencana untuk hari ini.</div>') +
     '<p class="catatan">Ketuk rencana untuk mengisi penyulang, section, dan jenis pekerjaan.</p>' +
@@ -918,7 +980,7 @@ function htmlFormAbsen() {
   var a = S.absenForm, r = dataRegu(namaRegu());
   if (a.jenis === 'MULAI') {
     var orang = r ? [r.koordinator].concat(r.anggota) : [];
-    return '<div class="form-absen" id="f-absen"><b>Konfirmasi kehadiran pelaksana</b><p class="catatan">Centang yang hadir hari ini.</p>' +
+    return '<div class="form-absen" id="f-absen">' + htmlRencanaKerja() + '<b>Konfirmasi kehadiran pelaksana</b><p class="catatan">Centang yang hadir hari ini.</p>' +
       orang.map(function (n, i) {
         return '<label class="cek-hadir"><input type="checkbox" data-hadir="' + esc(n) + '"' + (a.hadir[n] ? ' checked' : '') + '><span>' + esc(n) + (i === 0 ? ' <small>(koordinator)</small>' : '') + '</span></label>';
       }).join('') +
@@ -926,7 +988,7 @@ function htmlFormAbsen() {
       '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Konfirmasi &amp; Mulai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
   }
   var g = a.gawang === '' || a.gawang === undefined ? '' : a.gawang;
-  return '<div class="form-absen" id="f-absen"><b>Selesai kerja</b><div class="medan"><label for="a-gawang">Jumlah gawang dipangkas hari ini <span class="wajib">*</span></label>' +
+  return '<div class="form-absen" id="f-absen"><b>Selesai kerja</b>' + htmlRingkasRealisasi(g, 'Realisasi hari ini (sesuai input)') + '<div class="medan"><label for="a-gawang">Jumlah gawang dipangkas hari ini <span class="wajib">*</span></label>' +
     '<input id="a-gawang" type="number" min="0" step="1" inputmode="numeric" value="' + esc(g) + '" placeholder="0">' +
     '<p class="catatan" id="a-kms">' + (g !== '' ? '= ' + angkaId(g * meterGawang() / 1000, 2) + ' kms (' + meterGawang() + ' m per gawang)' : meterGawang() + ' m per gawang') + '</p></div>' +
     '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Simpan Selesai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
@@ -961,6 +1023,8 @@ function pasangRowHp() {
     if ($('#a-gawang')) $('#a-gawang').oninput = function () {
       a.gawang = $('#a-gawang').value;
       $('#a-kms').textContent = a.gawang !== '' ? '= ' + angkaId(a.gawang * meterGawang() / 1000, 2) + ' kms (' + meterGawang() + ' m per gawang)' : meterGawang() + ' m per gawang';
+      var lama = document.querySelector('.ringkas-realisasi'), baru = document.createElement('div');
+      if (lama) { baru.innerHTML = htmlRingkasRealisasi(a.gawang, 'Realisasi hari ini (sesuai input)'); lama.parentNode.replaceChild(baru.firstChild, lama); }
     };
     $('#a-batal').onclick = function () { S.absenForm = null; gambar(); };
     $('#a-simpan').onclick = function () {

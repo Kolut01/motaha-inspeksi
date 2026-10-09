@@ -147,6 +147,17 @@
   .cek-hadir { display: flex; align-items: center; gap: 10px; min-height: 44px; border-bottom: 1px solid var(--line); font-size: 15px; }
   .cek-hadir input { width: 22px; height: 22px; flex: none; }
   .cek-hadir small { color: var(--muted); }
+  .rencana-kerja, .ringkas-realisasi { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 10px 0 14px; background: var(--surface-2); }
+  .rencana-kerja.kosong { border-style: dashed; }
+  .rk-item { padding: 8px 0; border-top: 1px solid var(--line); }
+  .rk-item:first-of-type { border-top: 0; }
+  .rk-item small, .rr-angka small { display: block; color: var(--muted); }
+  .rr-angka { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; }
+  .rr-angka > div { background: var(--surface); border-radius: 10px; padding: 8px; min-width: 0; }
+  .rr-angka b { font-size: 1.1rem; display: block; }
+  .rr-baris { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .9rem; }
+  .rr-baris span:last-child { text-align: right; font-weight: 600; }
+  .rr-baris.kosong span:last-child { color: var(--belum); font-weight: 400; }
   .temuan-row { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; background: var(--surface-2); }
   .temuan-row > b { display: block; }
   .kartu-temuan-row { box-shadow: none; }
