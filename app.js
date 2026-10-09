@@ -6,8 +6,8 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-09.7';
-var VERSI_SERVER_MIN = '2026-10-09.7'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
+var VERSI_PWA = '2026-10-09.8';
+var VERSI_SERVER_MIN = '2026-10-09.8'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -780,7 +780,7 @@ function angkaId(n, d) { return Number(n).toLocaleString('id-ID', { minimumFract
 
 function drafRowBaru(lama) {
   return { idRencana: '', penyulang: lama ? lama.penyulang : '', section: '', sectionManual: false, jenis: lama ? lama.jenis : '',
-    koordinat: '', keterangan: '', fotoSebelum: null, fotoSesudah: null, fotoPengukuran: null };
+    koordinat: '', keterangan: '', fotoSebelum: null, fotoSesudah: null, fotoPengukuran: null, idTemuan: [] };
 }
 function simpanDrafRow() { DB.taruh('drafRow', S.drafRow).catch(function () {}); }
 
@@ -797,6 +797,39 @@ function absenHariIni() {
     if (!lama || (a.jenis === 'MULAI' ? a.waktu < lama.waktu : a.waktu > lama.waktu)) hasil[a.jenis] = a;
   });
   return hasil;
+}
+
+/**
+ * Temuan inspeksi berjenis ROW yang belum dieksekusi pada penyulang (& section bila diisi) — dari data HP.
+ * Temuan yang eksekusinya / realisasi penutupnya masih di antrean tidak ikut.
+ */
+function temuanRowTerbuka(penyulang, section) {
+  if (!S.data || !penyulang) return [];
+  var baku = function (t) { return String(t || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim(); };
+  var diantre = {};
+  S.antrean.forEach(function (x) {
+    if (x.aksi === 'eksekusiInspeksi') diantre[x.muatan.id] = 1;
+    if (x.aksi === 'simpanRealisasiRow') (x.muatan.idTemuan || []).forEach(function (id) { diantre[id] = 1; });
+  });
+  return daftarTemuan().filter(function (t) {
+    return !t._lokal && !diantre[t.ID] && baku(t['JENIS TEMUAN']) === 'ROW' && baku(t['PENYULANG']) === baku(penyulang) &&
+      (!section || baku(t['SECTION/SEGMEN']) === baku(section));
+  });
+}
+
+function htmlTemuanRow(f) {
+  var daftar = temuanRowTerbuka(f.penyulang, f.section);
+  if (!f.penyulang || !f.section) return '';
+  if (!daftar.length) return '<p class="catatan">Tidak ada temuan inspeksi ROW yang belum dieksekusi di section ini.</p>';
+  return '<div class="temuan-row"><b>Temuan inspeksi ROW di section ini (' + daftar.length + ')</b>' +
+    '<p class="catatan">Centang temuan yang ikut selesai dengan realisasi ini — otomatis ditandai Sudah Eksekusi memakai foto sesudah.</p>' +
+    daftar.map(function (t) {
+      return '<div class="kartu kartu-temuan-row"><label class="cek-hadir"><input type="checkbox" data-temuan="' + esc(t.ID) + '"' + ((f.idTemuan || []).indexOf(t.ID) !== -1 ? ' checked' : '') + '>' +
+        '<span><b>' + esc(tglTampil(t['TANGGAL INSPEKSI'])) + '</b> · ' + esc(t.ID) + '</span></label>' +
+        (t['KETERANGAN'] ? '<div class="kartu-ket">' + esc(t['KETERANGAN']) + '</div>' : '') +
+        '<div class="kartu-ket">' + esc(t['RENCANA TINDAK LANJUT'] || '') + (t['KOORDINAT'] ? ' · ' + esc(t['KOORDINAT']) : '') + '</div>' +
+        htmlFotoServer(t._fotoTemuan, 'Foto temuan') + '</div>';
+    }).join('') + '</div>';
 }
 
 function realisasiHariIniRow() {
@@ -835,11 +868,12 @@ function gambarRowHp(isi) {
   var ukur = (d.pilihan.pengukuran || []).indexOf(f.jenis) !== -1;
   var siapFoto = f.penyulang && f.section;
   var kartuRencana = function (r) {
-    var tk = r['TARGET PEMANGKASAN (KMS)'], tb = r['TARGET PENEBANGAN (BTG)'];
+    var tk = r['TARGET PEMANGKASAN (KMS)'], tb = r['TARGET PENEBANGAN (BTG)'], nT = temuanRowTerbuka(r.PENYULANG, r['SECTION/SEGMEN']).length;
     var target = [tk ? 'Pangkas ' + angkaId(tk, 2) + ' kms' : '', tb ? 'Tebang ' + tb + ' btg' : ''].filter(Boolean).join(' · ');
     return '<button type="button" class="kartu kartu-rencana' + (f.idRencana === r.ID ? ' terpilih' : '') + '" data-rencana="' + esc(r.ID) + '">' +
       '<div class="kartu-judul">' + esc(target || r['JENIS PEKERJAAN']) + '</div>' +
-      '<div class="kartu-ket">' + esc(r.PENYULANG + ' · ' + r['SECTION/SEGMEN']) + '</div><div class="kartu-ket">' + esc(r.REGU) + '</div></button>';
+      '<div class="kartu-ket">' + esc(r.PENYULANG + ' · ' + r['SECTION/SEGMEN']) + '</div><div class="kartu-ket">' + esc(r.REGU) + '</div>' +
+      (nT ? '<div class="tags"><span class="tag tag-belum">' + nT + ' temuan ROW belum eksekusi</span></div>' : '') + '</button>';
   };
   isi.innerHTML = '<h1>ROW · ' + esc(tglTampil(hariIni())) + '</h1>' +
     '<p class="sub">Catat Mulai &amp; Selesai kerja, lalu setiap titik pemangkasan / penebangan dengan foto sebelum &amp; sesudah.</p>' + htmlPesan() +
@@ -866,6 +900,7 @@ function gambarRowHp(isi) {
     daftarKp.map(function (v) { return opsi(v, manual ? '' : f.section); }).join('') +
     (f.penyulang ? opsi('__lain', manual ? '__lain' : '', 'Lainnya (ketik manual)…') : '') + '</select>' +
     (manual && f.penyulang ? '<input id="r-sec-lain" type="text" value="' + esc(f.section) + '" placeholder="Ketik nama section / segmen">' : '') + '</div>' +
+    htmlTemuanRow(f) +
     '<div class="medan"><span class="label">Jenis pekerjaan <span class="wajib">*</span></span>' + radio('r-jenis', d.pilihan.jenis, f.jenis) + '</div>' +
     (siapFoto ? htmlFoto('r-f1', 'Foto sebelum', true, f.fotoSebelum) + htmlFoto('r-f2', 'Foto sesudah', true, f.fotoSesudah) +
       (ukur ? htmlFoto('r-f3', 'Foto pengukuran batang', true, f.fotoPengukuran) : '')
@@ -956,8 +991,16 @@ function pasangRowHp() {
     };
   });
   $('#f-row').addEventListener('change', function () { ambilIsianRow(); simpanDrafRow(); });
-  $('#r-py').onchange = function () { ambilIsianRow(); f.section = ''; f.sectionManual = false; f.idRencana = ''; simpanDrafRow(); gambar(); };
-  $('#r-sec').onchange = function () { var lain = $('#r-sec').value === '__lain'; ulang(); if (lain && $('#r-sec-lain')) $('#r-sec-lain').focus(); };
+  $('#r-py').onchange = function () { ambilIsianRow(); f.section = ''; f.sectionManual = false; f.idRencana = ''; f.idTemuan = []; simpanDrafRow(); gambar(); };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-temuan]'), function (el) {
+    el.onchange = function () {
+      var id = el.getAttribute('data-temuan'); f.idTemuan = (f.idTemuan || []).filter(function (x) { return x !== id; });
+      if (el.checked) f.idTemuan.push(id);
+      simpanDrafRow();
+    };
+  });
+  pasangFotoServer();
+  $('#r-sec').onchange = function () { var lain = $('#r-sec').value === '__lain'; f.idTemuan = []; ulang(); if (lain && $('#r-sec-lain')) $('#r-sec-lain').focus(); };
   Array.prototype.forEach.call(document.querySelectorAll('input[name="r-jenis"]'), function (el) { el.onchange = ulang; });
   var lokasiTeks = function () { return f.penyulang + ' · ' + f.section; };
   pasangFoto('r-f1', function (foto) { ambilIsianRow(); f.fotoSebelum = foto; simpanDrafRow(); gambar(); }, 'MOTAHA ROW · ULP Kolaka Utara', lokasiTeks());
@@ -980,9 +1023,10 @@ function pasangRowHp() {
     if (salah) { S.pesan = { jenis: 'galat', teks: salah }; gambar(); window.scrollTo(0, 0); return; }
     var waktu = waktuLokal(), id = 'ROW-' + waktu.slice(0, 10).replace(/-/g, '') + '-' + hex(4);
     var item = { idAntre: id, aksi: 'simpanRealisasiRow', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
-      ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + ' · ROW · ' + waktu.slice(11, 16), tanggal: waktu.slice(0, 10) },
+      ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + ' · ROW · ' + waktu.slice(11, 16) + ((f.idTemuan || []).length ? ' · menutup ' + f.idTemuan.length + ' temuan' : ''), tanggal: waktu.slice(0, 10) },
       muatan: { idKlien: id, waktu: waktu, penyulang: f.penyulang, section: f.section, jenis: f.jenis, koordinat: f.koordinat, keterangan: f.keterangan,
         regu: namaRegu(), idRencana: f.idRencana,
+        idTemuan: temuanRowTerbuka(f.penyulang, f.section).map(function (t) { return t.ID; }).filter(function (id) { return (f.idTemuan || []).indexOf(id) !== -1; }),
         fotoSebelum: { mime: f.fotoSebelum.mime, data: f.fotoSebelum.data }, fotoSesudah: { mime: f.fotoSesudah.mime, data: f.fotoSesudah.data },
         fotoPengukuran: ukur ? { mime: f.fotoPengukuran.mime, data: f.fotoPengukuran.data } : null } };
     try { await DB.simpan(item); } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }

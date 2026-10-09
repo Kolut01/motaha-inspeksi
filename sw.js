@@ -1,6 +1,6 @@
 /* Service worker aplikasi HP Inspeksi: menyimpan berkas aplikasi agar bisa dibuka tanpa sinyal.
  * Data (permintaan ke Apps Script) TIDAK lewat sini — antrean kiriman dikelola app.js di IndexedDB. */
-var VERSI = '2026-10-09.7';
+var VERSI = '2026-10-09.8';
 var CACHE = 'motaha-inspeksi-' + VERSI;
 var BERKAS = ['./', 'index.html', 'app.js', 'exif.js', 'konfigurasi.js', 'manifest.webmanifest',
   'ikon-192.png', 'ikon-512.png', 'ikon-maskable-512.png', 'ikon-apple-180.png'];
