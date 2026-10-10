@@ -6,8 +6,8 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-09.10';
-var VERSI_SERVER_MIN = '2026-10-09.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
+var VERSI_PWA = '2026-10-10.6';
+var VERSI_SERVER_MIN = '2026-10-10.6'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -17,7 +17,8 @@ var S = {
   api: '', sesi: null, data: null, antrean: [], tab: 'input', draf: null, detail: null, eks: null,
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
   cari: '', saringPy: '', terakhirKirim: null, pembaruan: null, tlMode: 'belum', foto: {},
-  dataRow: null, drafRow: null, pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: ''
+  dataRow: null, drafRow: null, pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: '',
+  woIns: null, insForm: false, woForm: null
 };
 
 /* ---------- Util ---------- */
@@ -340,13 +341,17 @@ function gambar() {
       '<a class="tombol tombol-kecil" href="' + esc(S.pembaruan.url) + '">Unduh</a></div>' : '') +
     '<main id="isi"></main>' +
     '<nav class="nav" aria-label="Menu utama"><div class="nav-isi">' +
-    tombolNav('input', 'Temuan', IKON.input, 0) + tombolNav('tl', 'Tindak lanjut', IKON.tl, 0) + tombolNav('row', 'ROW', IKON.row, 0) +
-    tombolNav('real', 'Realisasi', IKON.real, 0) +
+    tombolNav('input', 'Inspeksi', IKON.input, 0) + tombolNav('tl', 'Tindak lanjut', IKON.tl, 0) + tombolNav('row', 'ROW', IKON.row, 0) +
+    tombolNav('real', 'Realisasi ROW', IKON.real, 0) +
     tombolNav('antre', 'Antrean', IKON.antre, jumlah) + '</div></nav>' +
     (S.lembar ? htmlMenu() : '');
   $('#buka-menu').onclick = function () { S.lembar = true; gambar(); };
   Array.prototype.forEach.call(document.querySelectorAll('[data-tab]'), function (b) {
-    b.onclick = function () { simpanDrafSekarang(); S.tab = b.getAttribute('data-tab'); S.detail = null; S.detailReal = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+    b.onclick = function () {
+      simpanDrafSekarang(); var ke = b.getAttribute('data-tab');
+      if (ke === 'input' && S.tab === 'input' && !S.gantiAntre) { S.insForm = false; S.woIns = null; S.woForm = null; } // ketuk lagi = kembali ke daftar WO
+      S.tab = ke; S.detail = null; S.detailReal = null; S.pesan = null; gambar(); window.scrollTo(0, 0);
+    };
   });
   if (S.lembar) pasangMenu();
   var isi = $('#isi');
@@ -355,7 +360,7 @@ function gambar() {
       'Belum ada data form di HP ini. Sambungkan ke internet sekali untuk mengambil daftar penyulang, setelah itu form bisa dipakai tanpa sinyal.') + '</p></div>';
     return;
   }
-  if (S.tab === 'input') gambarInput(isi);
+  if (S.tab === 'input') { if (S.insForm || S.gantiAntre) gambarInput(isi); else gambarInspeksiWo(isi); }
   else if (S.tab === 'tl') gambarTindakLanjut(isi);
   else if (S.tab === 'row') gambarRowHp(isi);
   else if (S.tab === 'real') gambarRealisasiHp(isi);
@@ -475,7 +480,7 @@ function drafBaru(lama) {
     tanggal: hariIni(), penyulang: lama ? lama.penyulang : '', section: '', sectionManual: false,
     jenis: '', rencana: '', material: '', koordinat: '', keterangan: '', status: '',
     petugasInspeksi: lama ? lama.petugasInspeksi : (py.nama || ''), petugasEksekusi: namaLogin(), tanggalEksekusi: hariIni(),
-    fotoTemuan: null, fotoEksekusi: null
+    fotoTemuan: null, fotoEksekusi: null, idRencana: ''
   };
 }
 
@@ -491,10 +496,12 @@ function simpanDrafNanti() { clearTimeout(tundaDraf); tundaDraf = setTimeout(sim
 function ambilIsian() {
   var f = S.draf, nilai = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : undefined; };
   var radio = function (n) { var el = document.querySelector('input[name="' + n + '"]:checked'); return el ? el.value : ''; };
-  f.tanggal = nilai('i-tgl'); f.penyulang = nilai('i-py') || '';
-  var sec = nilai('i-sec') || '';
-  f.sectionManual = sec === '__lain';
-  f.section = f.sectionManual ? (nilai('i-sec-lain') || '') : sec;
+  if (!f.idRencana) {  // temuan dari WO: tanggal, penyulang, section terkunci sesuai WO
+    f.tanggal = nilai('i-tgl'); f.penyulang = nilai('i-py') || '';
+    var sec = nilai('i-sec') || '';
+    f.sectionManual = sec === '__lain';
+    f.section = f.sectionManual ? (nilai('i-sec-lain') || '') : sec;
+  }
   f.jenis = radio('i-jenis'); f.rencana = radio('i-rencana'); f.material = radio('i-material'); f.status = radio('i-status');
   f.koordinat = nilai('i-koor') || ''; f.keterangan = nilai('i-ket') || ''; f.petugasInspeksi = nilai('i-pi') || '';
   if (document.getElementById('i-pe')) { f.petugasEksekusi = namaLogin(); f.tanggalEksekusi = nilai('i-tgl-eks'); }
@@ -514,10 +521,15 @@ function gambarInput(isi) {
   var opsi = function (v, pilih, label) { return '<option value="' + esc(v) + '"' + (v === pilih ? ' selected' : '') + '>' + esc(label || v) + '</option>'; };
   var daftarPy = m.penyulang.slice(); if (f.penyulang && daftarPy.indexOf(f.penyulang) === -1) daftarPy.push(f.penyulang);
   var sudah = f.status === p.status[1];
-  isi.innerHTML = '<h1>' + (S.gantiAntre ? 'Perbaiki temuan' : 'Input temuan inspeksi') + '</h1>' +
+  var woF = f.idRencana ? cariWoIns(f.idRencana) : null;
+  isi.innerHTML = (S.gantiAntre ? '' : '<button class="tombol-kembali" type="button" id="i-kembali">‹ ' + (f.idRencana ? 'Kembali ke WO' : 'Daftar WO inspeksi') + '</button>') +
+    '<h1>' + (S.gantiAntre ? 'Perbaiki temuan' : f.idRencana ? 'Tambah temuan' : 'Input temuan di luar WO') + '</h1>' +
     '<p class="sub">Tersimpan di HP dulu, lalu terkirim otomatis saat ada sinyal. <span class="wajib">*</span> wajib diisi.</p>' + htmlPesan() +
-    (m.peringatan ? '<div class="pesan pesan-info">' + esc(m.peringatan) + '</div>' : '') +
+    (m.peringatan && !f.idRencana ? '<div class="pesan pesan-info">' + esc(m.peringatan) + '</div>' : '') +
     '<form id="f-ins" class="panel" novalidate>' +
+    (f.idRencana ? '<div class="wo-kunci"><small>WO ' + esc(f.idRencana) + (woF ? ' · ' + esc(woF['JENIS INSPEKSI']) : '') + '</small>' +
+      '<dl class="rinci"><dt>Tanggal</dt><dd>' + esc(tglTampil(f.tanggal)) + '</dd><dt>Penyulang</dt><dd>' + esc(f.penyulang) + '</dd>' +
+      '<dt>Section / segmen</dt><dd>' + esc(f.section) + '</dd></dl><p class="catatan">Terisi otomatis sesuai WO.</p></div>' :
     '<div class="medan"><label for="i-tgl">Tanggal inspeksi <span class="wajib">*</span></label><input id="i-tgl" type="date" max="' + hariIni() + '" value="' + esc(f.tanggal) + '"></div>' +
     '<div class="medan"><label for="i-py">Nama penyulang <span class="wajib">*</span></label><select id="i-py">' +
     opsi('', f.penyulang, '— Pilih penyulang —') + daftarPy.map(function (v) { return opsi(v, f.penyulang); }).join('') + '</select></div>' +
@@ -525,7 +537,7 @@ function gambarInput(isi) {
     opsi('', manual ? '__lain' : f.section, f.penyulang ? '— Pilih section / segmen (' + daftarKp.length + ') —' : '— Pilih penyulang dulu —') +
     daftarKp.map(function (v) { return opsi(v, manual ? '' : f.section); }).join('') +
     (f.penyulang ? opsi('__lain', manual ? '__lain' : '', 'Lainnya (ketik manual)…') : '') + '</select>' +
-    (manual && f.penyulang ? '<input id="i-sec-lain" type="text" value="' + esc(f.section) + '" placeholder="Ketik nama section / segmen">' : '') + '</div>' +
+    (manual && f.penyulang ? '<input id="i-sec-lain" type="text" value="' + esc(f.section) + '" placeholder="Ketik nama section / segmen">' : '') + '</div>') +
     '<div class="medan"><span class="label">Jenis temuan <span class="wajib">*</span></span>' + radio('i-jenis', p.jenis, f.jenis) + '</div>' +
     '<div class="medan"><span class="label">Rencana tindak lanjut <span class="wajib">*</span></span>' + radio('i-rencana', p.rencana, f.rencana) + '</div>' +
     '<div class="medan"><span class="label">Kebutuhan material <span class="wajib">*</span></span>' + radio('i-material', p.material, f.material) + '</div>' +
@@ -550,8 +562,9 @@ function pasangInput() {
   var f = S.draf, ulang = function () { ambilIsian(); simpanDrafSekarang(); gambar(); };
   $('#f-ins').addEventListener('input', simpanDrafNanti);
   $('#f-ins').addEventListener('change', simpanDrafNanti);
-  $('#i-py').onchange = function () { ambilIsian(); f.section = ''; f.sectionManual = false; simpanDraf(); gambar(); };
-  $('#i-sec').onchange = function () {
+  if ($('#i-kembali')) $('#i-kembali').onclick = function () { ambilIsian(); simpanDraf(); S.insForm = false; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  if ($('#i-py')) $('#i-py').onchange = function () { ambilIsian(); f.section = ''; f.sectionManual = false; simpanDraf(); gambar(); };
+  if ($('#i-sec')) $('#i-sec').onchange = function () {
     var lain = $('#i-sec').value === '__lain'; ulang();
     if (lain && $('#i-sec-lain')) $('#i-sec-lain').focus();
   };
@@ -569,7 +582,8 @@ function pasangInput() {
   };
   $('#i-kosong').onclick = function () {
     if (!confirm('Kosongkan semua isian form?')) return;
-    S.draf = drafBaru(); S.gantiAntre = null; DB.taruh('draf', S.draf).catch(function () {}); gambar();
+    var wo = f.idRencana ? cariWoIns(f.idRencana) : null;
+    S.draf = wo ? drafDariWo(wo) : drafBaru(); S.gantiAntre = null; DB.taruh('draf', S.draf).catch(function () {}); gambar();
   };
   if ($('#i-batal')) $('#i-batal').onclick = function () { S.gantiAntre = null; S.draf = drafBaru(); DB.taruh('draf', S.draf).catch(function () {}); S.tab = 'antre'; gambar(); };
   $('#f-ins').onsubmit = async function (e) {
@@ -588,24 +602,212 @@ function pasangInput() {
     var idKlien = lama && lama.muatan.tanggal === f.tanggal ? lama.idAntre : 'INS-' + f.tanggal.replace(/-/g, '') + '-' + hex(4);
     var item = {
       idAntre: idKlien, aksi: 'simpanInspeksi', dibuat: lama ? lama.dibuat : new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
-      ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + ' · ' + f.status, tanggal: f.tanggal },
+      ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + ' · ' + f.status + (f.idRencana ? ' · WO' : ''), tanggal: f.tanggal },
       muatan: {
         idKlien: idKlien, tanggal: f.tanggal, penyulang: f.penyulang, section: f.section, jenis: f.jenis, rencana: f.rencana, material: f.material,
         koordinat: f.koordinat, keterangan: f.keterangan, status: f.status, petugasInspeksi: f.petugasInspeksi,
         fotoTemuan: { mime: f.fotoTemuan.mime, data: f.fotoTemuan.data },
         fotoEksekusi: sudah ? { mime: f.fotoEksekusi.mime, data: f.fotoEksekusi.data } : null,
-        petugasEksekusi: sudah ? namaLogin() : '', tanggalEksekusi: sudah ? (f.tanggalEksekusi || hariIni()) : ''
+        petugasEksekusi: sudah ? namaLogin() : '', tanggalEksekusi: sudah ? (f.tanggalEksekusi || hariIni()) : '',
+        idRencana: f.idRencana || ''
       }
     };
     try {
       if (lama && lama.idAntre !== idKlien) await DB.hapus(lama.idAntre);
       await DB.simpan(item);
     } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }
+    var dariWo = f.idRencana && cariWoIns(f.idRencana);
     S.draf = drafBaru(f); S.gantiAntre = null; DB.taruh('draf', S.draf).catch(function () {});
+    if (dariWo) { S.insForm = false; S.woIns = dariWo.ID; }
     await muatAntrean();
-    S.pesan = { jenis: 'ok', teks: navigator.onLine ? 'Temuan tersimpan dan sedang dikirim.' : 'Temuan tersimpan di HP. Akan dikirim otomatis saat ada sinyal.' };
+    S.pesan = { jenis: 'ok', teks: (navigator.onLine ? 'Temuan tersimpan dan sedang dikirim.' : 'Temuan tersimpan di HP. Akan dikirim otomatis saat ada sinyal.') +
+      (dariWo ? ' Tambah temuan lain atau tekan Selesai inspeksi bila sudah selesai.' : '') };
     gambar(); window.scrollTo(0, 0);
     kirimAntrean();
+  };
+}
+
+/* ---------- Inspeksi: WO rencana inspeksi → Start · Tambah temuan · Selesai ----------
+ * WO dibuat admin di dashboard (Rencana Inspeksi). Petugas memilih WO hari ini → Start (foto awal + koordinat)
+ * → Tambah temuan (penyulang & section terisi otomatis) → Selesai (foto finish + koordinat; bila tidak ada temuan
+ * wajib konfirmasi "tidak ada temuan").
+ */
+var LABEL_STATUS_INS = { belum: 'Belum dimulai', berjalan: 'Sedang inspeksi', selesai: 'Selesai', terlewat: 'Terlewat', nanti: 'Terjadwal' };
+var KELAS_STATUS_INS = { belum: 'tag-belum', berjalan: 'tag-jalan', selesai: 'tag-sudah', terlewat: 'tag-tolak', nanti: '' };
+
+function daftarWoIns() { return (S.data && S.data.wo) || []; }
+function cariWoIns(id) { return daftarWoIns().filter(function (w) { return w.ID === id; })[0] || null; }
+function apakahPascaIns(w) { return (S.data.jenisInspeksi || [])[1] === w['JENIS INSPEKSI']; }
+
+function drafDariWo(wo) {
+  return Object.assign(drafBaru(), { tanggal: wo.TANGGAL, penyulang: wo.PENYULANG, section: wo['SECTION/SEGMEN'], sectionManual: false,
+    idRencana: wo.ID, petugasInspeksi: wo.PETUGAS || ((S.sesi && S.sesi.pengguna) || {}).nama || '' });
+}
+
+/** Status WO dari data server + antrean HP (yang ditolak server tidak ikut). */
+function statusWoIns(wo) {
+  var antre = S.antrean.filter(function (x) { return aktif(x) && x.muatan && x.muatan.idRencana === wo.ID; });
+  var ambil = function (aksi) { return antre.filter(function (x) { return x.aksi === aksi; })[0]; };
+  var am = ambil('mulaiInspeksi'), as = ambil('selesaiInspeksi');
+  var mulai = wo['WAKTU MULAI'] ? { waktu: wo['WAKTU MULAI'], koordinat: wo['KOORDINAT MULAI'], oleh: wo['DIMULAI OLEH'] } :
+    am ? { waktu: am.muatan.waktu, koordinat: am.muatan.koordinat, antre: true } : null;
+  var selesai = wo['WAKTU SELESAI'] ? { waktu: wo['WAKTU SELESAI'], koordinat: wo['KOORDINAT SELESAI'], oleh: wo['DISELESAIKAN OLEH'], tanpaTemuan: wo['TANPA TEMUAN'] === 'Ya' } :
+    as ? { waktu: as.muatan.waktu, koordinat: as.muatan.koordinat, tanpaTemuan: !!as.muatan.tanpaTemuan, antre: true } : null;
+  var t = hariIni();
+  var status = selesai ? 'selesai' : mulai ? 'berjalan' : wo.TANGGAL < t ? 'terlewat' : wo.TANGGAL > t ? 'nanti' : 'belum';
+  var temuanAntre = antre.filter(function (x) { return x.aksi === 'simpanInspeksi'; }).length;
+  return { status: status, mulai: mulai, selesai: selesai, temuan: (wo.jumlahTemuan || 0) + temuanAntre };
+}
+
+/** Temuan milik satu WO: dari server (terbuka & selesai) + antrean HP. */
+function temuanWo(id) {
+  var antre = S.antrean.filter(function (x) { return x.aksi === 'simpanInspeksi' && aktif(x) && x.muatan.idRencana === id; }).map(function (x) {
+    var m = x.muatan; return { ID: x.idAntre, 'JENIS TEMUAN': m.jenis, 'KETERANGAN': m.keterangan, 'STATUS': m.status, 'KOORDINAT': m.koordinat, _lokal: true };
+  });
+  var ada = {}; antre.forEach(function (x) { ada[x.ID] = 1; });
+  var server = (S.data.terbuka || []).concat(S.data.selesai || []).filter(function (x) { return x['ID RENCANA'] === id && !ada[x.ID]; });
+  return antre.concat(server);
+}
+
+function kartuWoIns(w) {
+  var s = statusWoIns(w);
+  return '<button type="button" class="kartu kartu-wo st-' + s.status + '" data-wo-ins="' + esc(w.ID) + '">' +
+    '<div class="kartu-judul">' + esc(w.PENYULANG + ' · ' + w['SECTION/SEGMEN']) + '</div>' +
+    '<div class="kartu-ket">' + esc(w.PETUGAS) + '</div>' +
+    '<div class="tags"><span class="tag ' + (KELAS_STATUS_INS[s.status] || '') + '">' + LABEL_STATUS_INS[s.status] + (s.mulai && s.status === 'berjalan' ? ' · ' + esc(String(s.mulai.waktu).slice(11, 16)) : '') + '</span>' +
+    '<span class="tag' + (apakahPascaIns(w) ? ' tag-tolak' : '') + '">' + esc(apakahPascaIns(w) ? 'Pasca gangguan' : 'Rutin') + '</span>' +
+    (w.TANGGAL !== hariIni() ? '<span class="tag">' + esc(tglTampil(w.TANGGAL)) + '</span>' : '') +
+    (s.status === 'selesai' || s.status === 'berjalan' ? '<span class="tag">' + (s.temuan ? s.temuan + ' temuan' : s.status === 'selesai' ? 'Tidak ada temuan' : '0 temuan') + '</span>' : '') +
+    '</div></button>';
+}
+
+function gambarInspeksiWo(isi) {
+  var wo = S.woIns ? cariWoIns(S.woIns) : null;
+  if (S.woIns && !wo) S.woIns = null;
+  if (wo) { gambarDetailWoIns(isi, wo); return; }
+  var t = hariIni(), semua = daftarWoIns().slice().sort(function (a, b) { return (a.TANGGAL + a.PETUGAS) < (b.TANGGAL + b.PETUGAS) ? -1 : 1; });
+  var dgSt = semua.map(function (w) { return { w: w, s: statusWoIns(w) }; });
+  var ini = dgSt.filter(function (x) { return x.w.TANGGAL === t; });
+  var tertunda = dgSt.filter(function (x) { return x.w.TANGGAL < t && x.s.status !== 'selesai'; });
+  var selesaiLalu = dgSt.filter(function (x) { return x.w.TANGGAL < t && x.s.status === 'selesai'; }).reverse();
+  var depan = dgSt.filter(function (x) { return x.w.TANGGAL > t; });
+  var nSelesai = ini.filter(function (x) { return x.s.status === 'selesai'; }).length;
+  var nJalan = ini.filter(function (x) { return x.s.status === 'berjalan'; }).length;
+  var daftar = function (arr) { return arr.map(function (x) { return kartuWoIns(x.w); }).join(''); };
+  isi.innerHTML = '<h1>Inspeksi · ' + esc(tglTampil(t)) + '</h1><p class="sub">Pilih WO (rencana inspeksi) yang akan dijalankan.</p>' + htmlPesan() +
+    (S.data.wo === undefined ? '<div class="pesan pesan-galat">Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN + '. Hubungi admin, lalu buka menu akun → Perbarui data.</div>' : '') +
+    '<div class="ringkas-wo"><div><small>WO hari ini</small><b>' + ini.length + '</b></div><div class="ok"><small>Selesai</small><b>' + nSelesai + '</b></div>' +
+    '<div class="blm"><small>Belum selesai</small><b>' + (ini.length - nSelesai) + '</b>' + (nJalan ? '<small>' + nJalan + ' sedang inspeksi</small>' : '') + '</div></div>' +
+    '<h2 class="judul-bagian">WO hari ini</h2>' + (ini.length ? daftar(ini) : '<div class="kosong-daftar">Belum ada WO inspeksi untuk hari ini.</div>') +
+    (tertunda.length ? '<h2 class="judul-bagian">Belum selesai dari hari sebelumnya (' + tertunda.length + ')</h2>' + daftar(tertunda) : '') +
+    (selesaiLalu.length ? '<details class="lainnya"><summary>Selesai 7 hari terakhir (' + selesaiLalu.length + ')</summary>' + daftar(selesaiLalu) + '</details>' : '') +
+    (depan.length ? '<details class="lainnya"><summary>Jadwal mendatang (' + depan.length + ')</summary>' + daftar(depan) + '</details>' : '') +
+    '<button class="tombol tombol-lebar" type="button" id="w-luar-wo" style="margin-top:14px">+ Input temuan di luar WO</button>';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-wo-ins]'), function (b) {
+    b.onclick = function () { S.woIns = b.getAttribute('data-wo-ins'); S.woForm = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  });
+  $('#w-luar-wo').onclick = function () {
+    if (S.draf && S.draf.idRencana) S.draf = drafBaru();
+    S.insForm = true; S.pesan = null; gambar(); window.scrollTo(0, 0);
+  };
+}
+
+function gambarDetailWoIns(isi, wo) {
+  var s = statusWoIns(wo), pasca = apakahPascaIns(wo), daftarT = temuanWo(wo.ID), a = S.woForm, t = hariIni();
+  var A = function (f) { var v = wo['ARUS ' + f + ' (A)']; return v === '' || v === null || v === undefined ? '—' : angkaId(v, v % 1 ? 1 : 0); };
+  var jam = function (x) { return x ? String(x.waktu).slice(11, 16) + (x.antre ? ' (antre)' : '') : '—'; };
+  var form = '';
+  if (a) {
+    var tanpa = a.jenis === 'selesai' && !s.temuan;
+    form = '<div class="form-absen" id="f-wo-ins"><b>' + (a.jenis === 'mulai' ? 'Start inspeksi' : 'Selesai inspeksi') + '</b>' +
+      htmlFoto('w-foto', a.jenis === 'mulai' ? 'Foto awal (start)' : 'Foto finish', true, a.foto) +
+      '<div class="medan"><label for="w-koor">Titik koordinat ' + (a.jenis === 'mulai' ? 'awal' : 'akhir') + ' <span class="wajib">*</span></label><div class="baris-isian">' +
+      '<input id="w-koor" type="text" inputmode="decimal" value="' + esc(a.koordinat) + '" placeholder="-3.123456, 121.123456"><button class="tombol" type="button" id="w-gps">Lokasi saya</button></div>' +
+      '<p class="catatan">Terisi otomatis dari foto / GPS HP.</p></div>' +
+      (a.jenis === 'selesai' ? (tanpa ? '<label class="cek-hadir konfirmasi"><input type="checkbox" id="w-tanpa"' + (a.yakin ? ' checked' : '') + '>' +
+        '<span>Saya mengonfirmasi <b>tidak ada temuan</b> pada inspeksi WO ini.</span></label>' :
+        '<p class="pesan pesan-info">' + s.temuan + ' temuan tercatat pada WO ini.</p>') : '') +
+      '<div class="absen-tombol"><button class="tombol-utama" type="button" id="w-simpan">' + (a.jenis === 'mulai' ? 'Start inspeksi' : 'Selesai') + '</button>' +
+      '<button class="tombol" type="button" id="w-batal">Batal</button></div></div>';
+  }
+  var tombol = '';
+  if (!a) {
+    if (s.status === 'belum') tombol = '<button class="tombol-utama" type="button" id="w-mulai">Start inspeksi</button>';
+    else if (s.status === 'berjalan') tombol = '<button class="tombol-utama" type="button" id="w-temuan">+ Tambah temuan</button><button class="tombol" type="button" id="w-selesai">Selesai</button>';
+  }
+  isi.innerHTML = '<button class="tombol-kembali" type="button" id="w-kembali">‹ Daftar WO inspeksi</button>' +
+    '<h1>' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '</h1>' + htmlPesan() +
+    '<div class="panel"><div class="tags"><span class="tag ' + (KELAS_STATUS_INS[s.status] || '') + '">' + LABEL_STATUS_INS[s.status] + '</span>' +
+    '<span class="tag' + (pasca ? ' tag-tolak' : '') + '">' + esc(wo['JENIS INSPEKSI']) + '</span></div>' +
+    '<dl class="rinci"><dt>Tanggal</dt><dd>' + esc(tglTampil(wo.TANGGAL)) + '</dd><dt>Petugas</dt><dd>' + esc(wo.PETUGAS) + '</dd>' +
+    (pasca ? '<dt>Status gangguan</dt><dd>' + esc(wo['STATUS GANGGUAN'] || '—') + '</dd><dt>Jam trip</dt><dd>' + esc(String(wo['WAKTU TRIP'] || '—')) + '</dd>' +
+      '<dt>Arus gangguan</dt><dd>R ' + A('R') + ' · S ' + A('S') + ' · T ' + A('T') + ' · N ' + A('N') + ' A</dd>' : '') +
+    (wo.KETERANGAN ? '<dt>Keterangan</dt><dd>' + esc(wo.KETERANGAN) + '</dd>' : '') + '</dl>' +
+    (s.mulai ? '<div class="absen-baris"><div><small>Start</small><b>' + jam(s.mulai) + '</b></div><div><small>Selesai</small><b>' + jam(s.selesai) + '</b></div>' +
+      '<div><small>Temuan</small><b>' + s.temuan + '</b></div></div>' : '') +
+    form + (tombol ? '<div class="absen-tombol">' + tombol + '</div>' : '') +
+    (s.status === 'belum' && !a ? '<p class="catatan">Start: ambil foto awal; titik koordinat dicatat otomatis.</p>' : '') +
+    (s.status === 'terlewat' ? '<p class="pesan pesan-galat">WO ini tidak di-Start pada tanggalnya (' + esc(tglTampil(wo.TANGGAL)) + ').</p>' : '') +
+    (s.status === 'nanti' ? '<p class="pesan pesan-info">Start bisa dilakukan pada tanggal ' + esc(tglTampil(wo.TANGGAL)) + '.</p>' : '') +
+    (s.status === 'selesai' ? '<p class="pesan pesan-ok">Inspeksi selesai' + (s.selesai.tanpaTemuan ? ' — dikonfirmasi <b>tidak ada temuan</b>.' : ' dengan ' + s.temuan + ' temuan.') + '</p>' +
+      (wo._fotoMulai || wo._fotoSelesai ? '<div class="foto-titik">' + htmlFotoServer(wo._fotoMulai, 'Foto awal') + htmlFotoServer(wo._fotoSelesai, 'Foto finish') + '</div>' : '') : '') +
+    '</div>' +
+    (s.status !== 'belum' && s.status !== 'nanti' && s.status !== 'terlewat' ? '<h2 class="judul-bagian">Temuan WO ini (' + daftarT.length + ')</h2>' +
+      (daftarT.length ? daftarT.map(function (x) {
+        return '<div class="kartu"><div class="kartu-judul">' + esc(x['JENIS TEMUAN']) + (x._lokal ? '' : ' · ' + esc(x.ID)) + '</div>' +
+          (x['KETERANGAN'] ? '<div class="kartu-ket">' + esc(x['KETERANGAN']) + '</div>' : '') +
+          (x['KOORDINAT'] ? '<div class="kartu-ket">📍 ' + esc(x['KOORDINAT']) + '</div>' : '') +
+          (x._lokal ? '<div class="tags"><span class="tag tag-tunggu">Belum terkirim</span></div>' : '') + '</div>';
+      }).join('') : '<div class="kosong-daftar">Belum ada temuan.' + (s.status === 'berjalan' ? ' Tekan <b>+ Tambah temuan</b> bila ada potensi gangguan.' : '') + '</div>') : '');
+  pasangDetailWoIns(wo, s);
+}
+
+function pasangDetailWoIns(wo, s) {
+  var a = S.woForm;
+  $('#w-kembali').onclick = function () { S.woIns = null; S.woForm = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  if ($('#w-mulai')) $('#w-mulai').onclick = function () { S.woForm = { jenis: 'mulai', foto: null, koordinat: '' }; S.pesan = null; gambar(); };
+  if ($('#w-selesai')) $('#w-selesai').onclick = function () { S.woForm = { jenis: 'selesai', foto: null, koordinat: '', yakin: false }; S.pesan = null; gambar(); };
+  if ($('#w-temuan')) $('#w-temuan').onclick = function () {
+    if (!S.draf || S.draf.idRencana !== wo.ID) S.draf = drafDariWo(wo);
+    DB.taruh('draf', S.draf).catch(function () {});
+    S.insForm = true; S.pesan = null; gambar(); window.scrollTo(0, 0);
+  };
+  pasangFotoServer();
+  if (!a) return;
+  var lokasi = wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'];
+  pasangFoto('w-foto', function (foto) {
+    a.koordinat = $('#w-koor').value.trim(); a.foto = foto;
+    if (foto.koordinat && !a.koordinat) a.koordinat = foto.koordinat;
+    gambar();
+  }, a.jenis === 'mulai' ? 'MOTAHA Inspeksi · Start' : 'MOTAHA Inspeksi · Finish', lokasi);
+  $('#w-koor').oninput = function () { a.koordinat = $('#w-koor').value.trim(); };
+  $('#w-gps').onclick = function () { ambilLokasi(function (k, ak) { a.koordinat = k; gambar(); toast('Lokasi didapat (±' + ak + ' m).'); }); };
+  if ($('#w-tanpa')) $('#w-tanpa').onchange = function () { a.yakin = $('#w-tanpa').checked; };
+  $('#w-batal').onclick = function () { S.woForm = null; gambar(); };
+  $('#w-simpan').onclick = async function () {
+    a.koordinat = $('#w-koor').value.trim();
+    var tanpa = a.jenis === 'selesai' && !statusWoIns(wo).temuan;
+    if (!a.foto) { toast(a.jenis === 'mulai' ? 'Ambil foto awal dulu.' : 'Ambil foto finish dulu.'); return; }
+    if (tanpa && !a.yakin) { toast('Centang konfirmasi tidak ada temuan.'); return; }
+    if (a.jenis === 'mulai' && wo.TANGGAL !== hariIni()) { toast('Start hanya bisa pada tanggal WO.'); return; }
+    if (!koordinatSah(a.koordinat)) {
+      toast('Mencari lokasi GPS…');
+      var l = await lokasiHp(20000);
+      if (!l) { S.pesan = { jenis: 'galat', teks: 'Titik koordinat belum didapat. Aktifkan lokasi lalu tekan Lokasi saya.' }; gambar(); return; }
+      a.koordinat = l.koordinat;
+    }
+    var waktu = waktuLokal(), id = 'WIN-' + waktu.slice(0, 10).replace(/-/g, '') + '-' + hex(4);
+    var aksi = a.jenis === 'mulai' ? 'mulaiInspeksi' : 'selesaiInspeksi';
+    var item = { idAntre: id, aksi: aksi, dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
+      ringkasan: { judul: (a.jenis === 'mulai' ? 'Start inspeksi · ' : 'Selesai inspeksi · ') + wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'],
+        sub: wo.PETUGAS + ' · ' + waktu.slice(11, 16) + (tanpa ? ' · tidak ada temuan' : ''), tanggal: waktu.slice(0, 10) },
+      muatan: { idKlien: id, idRencana: wo.ID, waktu: waktu, koordinat: a.koordinat, foto: { mime: a.foto.mime, data: a.foto.data }, tanpaTemuan: tanpa } };
+    try { await DB.simpan(item); } catch (e) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + e.message }; gambar(); return; }
+    await muatAntrean();
+    S.woForm = null;
+    S.pesan = { jenis: 'ok', teks: a.jenis === 'mulai' ? 'Inspeksi dimulai ' + waktu.slice(11, 16) + '. Tekan + Tambah temuan bila ada potensi gangguan.' :
+      'Inspeksi selesai ' + waktu.slice(11, 16) + (tanpa ? ' — tidak ada temuan.' : '.') };
+    gambar(); window.scrollTo(0, 0); kirimAntrean();
   };
 }
 
@@ -617,7 +819,7 @@ function daftarTemuan() {
     var m = x.muatan;
     return { 'ID': x.idAntre, 'TANGGAL INSPEKSI': m.tanggal, 'PENYULANG': m.penyulang, 'SECTION/SEGMEN': m.section, 'JENIS TEMUAN': m.jenis,
       'RENCANA TINDAK LANJUT': m.rencana, 'KEBUTUHAN MATERIAL': m.material, 'KOORDINAT': m.koordinat, 'KETERANGAN': m.keterangan,
-      'PETUGAS INSPEKSI': m.petugasInspeksi, _lokal: true };
+      'PETUGAS INSPEKSI': m.petugasInspeksi, 'ID RENCANA': m.idRencana || '', _lokal: true };
   });
   var ada = {}; lokal.forEach(function (x) { ada[x.ID] = true; });
   return lokal.concat((S.data.terbuka || []).filter(function (x) { return !ada[x.ID]; }));
@@ -1176,7 +1378,7 @@ function pasangFormRealisasi(wo) {
 /* ----- Menu Realisasi: WO yang sudah Selesai (7 hari terakhir) ----- */
 function gambarRealisasiHp(isi) {
   var d = S.dataRow;
-  if (!d) { isi.innerHTML = '<h1>Realisasi</h1><div class="panel"><p>' + (navigator.onLine ? '<span class="putar"></span> Mengambil data ROW…' : 'Data ROW belum ada di HP ini. Sambungkan ke internet sekali.') + '</p></div>'; return; }
+  if (!d) { isi.innerHTML = '<h1>Realisasi ROW</h1><div class="panel"><p>' + (navigator.onLine ? '<span class="putar"></span> Mengambil data ROW…' : 'Data ROW belum ada di HP ini. Sambungkan ke internet sekali.') + '</p></div>'; return; }
   var semua = absenSemua();
   var selesai = (d.rencana || []).map(function (r) { return { wo: r, st: statusWo(r.ID, semua) }; }).filter(function (x) { return x.st.status === 'selesai'; })
     .sort(function (a, b) { return String(b.st.selesai.waktu) < String(a.st.selesai.waktu) ? -1 : 1; });
@@ -1196,7 +1398,7 @@ function gambarRealisasiHp(isi) {
     return;
   }
   var tampil = selesai.filter(function (x) { return !saring || x.wo.REGU === saring; });
-  isi.innerHTML = '<h1>Realisasi</h1><p class="sub">Pekerjaan ROW yang sudah Selesai, 7 hari terakhir.</p>' +
+  isi.innerHTML = '<h1>Realisasi ROW</h1><p class="sub">Pekerjaan ROW yang sudah Selesai, 7 hari terakhir.</p>' +
     (Object.keys(reguAda).length > 1 ? '<div class="medan"><select id="rl-regu"><option value="">Semua regu</option>' + Object.keys(reguAda).sort().map(function (n) {
       return '<option value="' + esc(n) + '"' + (n === saring ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></div>' : '') +
     (tampil.length ? tampil.map(function (x) {
@@ -1248,7 +1450,8 @@ function gambarAntrean(isi) {
       koordinat: m.koordinat, keterangan: m.keterangan, status: m.status, petugasInspeksi: m.petugasInspeksi,
       petugasEksekusi: namaLogin(), tanggalEksekusi: m.tanggalEksekusi || hariIni(),
       fotoTemuan: m.fotoTemuan ? { mime: m.fotoTemuan.mime, data: m.fotoTemuan.data, kb: Math.round(m.fotoTemuan.data.length * 0.75 / 1024) } : null,
-      fotoEksekusi: m.fotoEksekusi ? { mime: m.fotoEksekusi.mime, data: m.fotoEksekusi.data, kb: Math.round(m.fotoEksekusi.data.length * 0.75 / 1024) } : null
+      fotoEksekusi: m.fotoEksekusi ? { mime: m.fotoEksekusi.mime, data: m.fotoEksekusi.data, kb: Math.round(m.fotoEksekusi.data.length * 0.75 / 1024) } : null,
+      idRencana: m.idRencana || ''
     });
     S.gantiAntre = x.idAntre; S.tab = 'input'; S.pesan = { jenis: 'galat', teks: 'Ditolak server: ' + x.pesan }; gambar(); window.scrollTo(0, 0);
   });

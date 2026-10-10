@@ -159,6 +159,17 @@
   .rr-baris { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .9rem; }
   .rr-baris span:last-child { text-align: right; font-weight: 600; }
   .rr-baris.kosong span:last-child { color: var(--belum); font-weight: 400; }
+  .ringkas-wo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 6px; }
+  .ringkas-wo > div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; }
+  .ringkas-wo small { color: var(--muted); font-size: 11.5px; }
+  .ringkas-wo b { font-size: 22px; }
+  .ringkas-wo .ok b { color: var(--sudah); }
+  .ringkas-wo .blm b { color: var(--belum); }
+  .kartu-wo.st-selesai { border-left: 4px solid var(--sudah); opacity: 1; }
+  .kartu-wo.st-belum, .kartu-wo.st-terlewat { border-left: 4px solid var(--belum); }
+  .wo-kunci { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; }
+  .wo-kunci small { color: var(--muted); }
+  .wo-kunci dl.rinci { margin-top: 6px; }
   .tombol-kembali { background: none; border: 0; color: var(--accent); font-weight: 700; padding: 6px 0; margin-bottom: 4px; min-height: 40px; }
   .tombol-lebar { width: 100%; margin-bottom: 10px; }
   .tombol-istirahat { background: var(--warn-text); }
