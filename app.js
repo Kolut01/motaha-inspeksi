@@ -6,8 +6,8 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-12.9';
-var VERSI_SERVER_MIN = '2026-10-12.9'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
+var VERSI_PWA = '2026-10-12.10';
+var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -459,7 +459,6 @@ function pasangMasuk() {
       if (!j.kunciPerangkat) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN + '. Hubungi admin.');
       S.sesi = { token: j.token, kunci: j.kunciPerangkat, pengguna: j.pengguna };
       tulisLokal(KUNCI.sesi, S.sesi); S.pesan = null;
-      if (S.draf && !S.draf.petugasInspeksi) S.draf.petugasInspeksi = j.pengguna.nama || '';
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
       gambar(); muatData(true); kirimAntrean();
     } catch (err) {
@@ -479,7 +478,7 @@ function drafBaru(lama) {
   return {
     tanggal: hariIni(), penyulang: lama ? lama.penyulang : '', section: '', sectionManual: false,
     jenis: '', rencana: '', material: '', koordinat: '', keterangan: '', status: '',
-    petugasInspeksi: lama ? lama.petugasInspeksi : (py.nama || ''), petugasEksekusi: namaLogin(), tanggalEksekusi: hariIni(),
+    petugasInspeksi: namaLogin(), petugasEksekusi: namaLogin(), tanggalEksekusi: hariIni(),
     fotoTemuan: null, fotoEksekusi: null, idRencana: ''
   };
 }
@@ -503,7 +502,7 @@ function ambilIsian() {
     f.section = f.sectionManual ? (nilai('i-sec-lain') || '') : sec;
   }
   f.jenis = radio('i-jenis'); f.rencana = radio('i-rencana'); f.material = radio('i-material'); f.status = radio('i-status');
-  f.koordinat = nilai('i-koor') || ''; f.keterangan = nilai('i-ket') || ''; f.petugasInspeksi = nilai('i-pi') || '';
+  f.koordinat = nilai('i-koor') || ''; f.keterangan = nilai('i-ket') || ''; f.petugasInspeksi = namaLogin();
   if (document.getElementById('i-pe')) { f.petugasEksekusi = namaLogin(); f.tanggalEksekusi = nilai('i-tgl-eks'); }
   return f;
 }
@@ -545,7 +544,7 @@ function gambarInput(isi) {
     '<div class="medan"><label for="i-koor">Titik koordinat</label><div class="baris-isian"><input id="i-koor" type="text" inputmode="decimal" value="' + esc(f.koordinat) + '" placeholder="-3.123456, 121.123456">' +
     '<button class="tombol" type="button" id="i-gps">Lokasi saya</button></div><p class="catatan" id="i-koor-ket">Terisi otomatis dari foto bila kamera menyimpan lokasi.</p></div>' +
     '<div class="medan"><label for="i-ket">Keterangan</label><textarea id="i-ket" placeholder="Uraian temuan, lokasi detail, risiko…">' + esc(f.keterangan) + '</textarea></div>' +
-    '<div class="medan"><label for="i-pi">Nama petugas inspeksi <span class="wajib">*</span></label><input id="i-pi" type="text" autocomplete="name" value="' + esc(f.petugasInspeksi) + '"></div>' +
+    htmlPetugasLogin('i-pi', 'Nama petugas inspeksi') +
     '<div class="medan"><span class="label">Status temuan <span class="wajib">*</span></span>' + radio('i-status', p.status, f.status || p.status[0]) + '</div>' +
     (sudah ? '<div class="blok-eksekusi"><p class="catatan" style="margin-bottom:10px"><b>Sudah eksekusi:</b> foto setelah eksekusi dan petugas eksekusi wajib diisi.</p>' +
       htmlFoto('i-foto2', 'Foto setelah eksekusi', true, f.fotoEksekusi) +
@@ -594,7 +593,7 @@ function pasangInput() {
       !f.penyulang ? 'Pilih nama penyulang.' : !f.section ? 'Nama section/segmen wajib diisi.' :
       !f.jenis ? 'Pilih jenis temuan.' : !f.rencana ? 'Pilih rencana tindak lanjut.' : !f.material ? 'Pilih kebutuhan material.' :
       !f.fotoTemuan ? 'Foto temuan wajib dilampirkan.' : f.koordinat && !koordinatSah(f.koordinat) ? 'Titik koordinat tidak sah (contoh: -3.123456, 121.123456).' :
-      !f.petugasInspeksi ? 'Nama petugas inspeksi wajib diisi.' : !f.status ? 'Pilih status temuan.' :
+      !namaLogin() ? 'Nama akun tidak terbaca — keluar lalu masuk lagi.' : !f.status ? 'Pilih status temuan.' :
       sudah && !f.fotoEksekusi ? 'Foto setelah eksekusi wajib dilampirkan.' : sudah && !namaLogin() ? 'Nama akun tidak terbaca — keluar lalu masuk lagi.' :
       sudah && f.tanggalEksekusi && f.tanggalEksekusi < f.tanggal ? 'Tanggal eksekusi tidak boleh sebelum tanggal inspeksi.' : '';
     if (salah) { S.pesan = { jenis: 'galat', teks: salah }; gambar(); window.scrollTo(0, 0); return; }
@@ -605,7 +604,7 @@ function pasangInput() {
       ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + ' · ' + f.status + (f.idRencana ? ' · WO' : ''), tanggal: f.tanggal },
       muatan: {
         idKlien: idKlien, tanggal: f.tanggal, penyulang: f.penyulang, section: f.section, jenis: f.jenis, rencana: f.rencana, material: f.material,
-        koordinat: f.koordinat, keterangan: f.keterangan, status: f.status, petugasInspeksi: f.petugasInspeksi,
+        koordinat: f.koordinat, keterangan: f.keterangan, status: f.status, petugasInspeksi: namaLogin(),
         fotoTemuan: { mime: f.fotoTemuan.mime, data: f.fotoTemuan.data },
         fotoEksekusi: sudah ? { mime: f.fotoEksekusi.mime, data: f.fotoEksekusi.data } : null,
         petugasEksekusi: sudah ? namaLogin() : '', tanggalEksekusi: sudah ? (f.tanggalEksekusi || hariIni()) : '',
@@ -641,7 +640,7 @@ function apakahPascaIns(w) { return (S.data.jenisInspeksi || [])[1] === w['JENIS
 
 function drafDariWo(wo) {
   return Object.assign(drafBaru(), { tanggal: wo.TANGGAL, penyulang: wo.PENYULANG, section: wo['SECTION/SEGMEN'], sectionManual: false,
-    idRencana: wo.ID, petugasInspeksi: wo.PETUGAS || ((S.sesi && S.sesi.pengguna) || {}).nama || '' });
+    idRencana: wo.ID, petugasInspeksi: namaLogin() });
 }
 
 /** Status WO dari data server + antrean HP (yang ditolak server tidak ikut). */
@@ -828,10 +827,12 @@ function daftarTemuan() {
 
 function eksekusiTertunda(id) { return S.antrean.filter(function (x) { return x.aksi === 'eksekusiInspeksi' && x.muatan.id === id; })[0]; }
 
-function htmlPetugasEksekusi(id) {
-  return '<div class="medan"><label for="' + id + '">Nama petugas eksekusi</label><input id="' + id + '" type="text" value="' + esc(namaLogin()) + '" readonly aria-readonly="true">' +
+/** Nama petugas inspeksi / eksekusi = akun yang login (terkunci; server juga memakai akun login). */
+function htmlPetugasLogin(id, label) {
+  return '<div class="medan"><label for="' + id + '">' + label + '</label><input id="' + id + '" type="text" value="' + esc(namaLogin()) + '" readonly aria-readonly="true" class="isian-terkunci">' +
     '<p class="catatan">Otomatis sesuai akun yang masuk.</p></div>';
 }
+function htmlPetugasEksekusi(id) { return htmlPetugasLogin(id, 'Nama petugas eksekusi'); }
 
 function cocokCari(x) {
   if (S.saringPy && x['PENYULANG'] !== S.saringPy) return false;
@@ -1731,7 +1732,7 @@ function gambarAntrean(isi) {
     var m = x.muatan;
     S.draf = Object.assign(drafBaru(), {
       tanggal: m.tanggal, penyulang: m.penyulang, section: m.section, jenis: m.jenis, rencana: m.rencana, material: m.material,
-      koordinat: m.koordinat, keterangan: m.keterangan, status: m.status, petugasInspeksi: m.petugasInspeksi,
+      koordinat: m.koordinat, keterangan: m.keterangan, status: m.status, petugasInspeksi: namaLogin(),
       petugasEksekusi: namaLogin(), tanggalEksekusi: m.tanggalEksekusi || hariIni(),
       fotoTemuan: m.fotoTemuan ? { mime: m.fotoTemuan.mime, data: m.fotoTemuan.data, kb: Math.round(m.fotoTemuan.data.length * 0.75 / 1024) } : null,
       fotoEksekusi: m.fotoEksekusi ? { mime: m.fotoEksekusi.mime, data: m.fotoEksekusi.data, kb: Math.round(m.fotoEksekusi.data.length * 0.75 / 1024) } : null,
