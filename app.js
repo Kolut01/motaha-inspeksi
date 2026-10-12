@@ -6,8 +6,8 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-12.8';
-var VERSI_SERVER_MIN = '2026-10-12.8'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
+var VERSI_PWA = '2026-10-12.9';
+var VERSI_SERVER_MIN = '2026-10-12.9'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -1010,10 +1010,11 @@ function aktif(x) { return x.status !== 'ditolak'; }
 /** Semua catatan Mulai/Istirahat/Mulai lagi/Selesai: dari server + antrean HP (yang ditolak server tidak ikut). */
 function absenSemua() {
   return ((S.dataRow && S.dataRow.absen) || []).filter(function (a) { return a['ID RENCANA']; }).map(function (a) {
-    return { id: String(a.ID).toUpperCase(), idRencana: a['ID RENCANA'], jenis: a.JENIS, waktu: a.WAKTU, regu: a.REGU, gawang: a.GAWANG, hadir: a.HADIR, tidakHadir: a['TIDAK HADIR'] };
+    return { id: String(a.ID).toUpperCase(), idRencana: a['ID RENCANA'], jenis: a.JENIS, waktu: a.WAKTU, regu: a.REGU, gawang: a.GAWANG, hadir: a.HADIR, tidakHadir: a['TIDAK HADIR'],
+      koordinat: a.KOORDINAT, foto: a.foto || '' };
   }).concat(S.antrean.filter(function (x) { return x.aksi === 'absenRow' && aktif(x) && x.muatan.idRencana; }).map(function (x) {
     var m = x.muatan;
-    return { id: String(m.idKlien).toUpperCase(), idRencana: m.idRencana, jenis: m.jenis, waktu: m.waktu, regu: m.regu, gawang: m.gawang, antre: true,
+    return { id: String(m.idKlien).toUpperCase(), idRencana: m.idRencana, jenis: m.jenis, waktu: m.waktu, regu: m.regu, gawang: m.gawang, antre: true, koordinat: m.koordinat,
       hadir: (m.hadir || []).join(', '), tidakHadir: (m.tidakHadir || []).map(function (t) { return t.nama + ' (' + t.alasan + ')'; }).join(', ') };
   }));
 }
@@ -1382,6 +1383,271 @@ function pasangFormRealisasi(wo) {
   };
 }
 
+/* ----- Unduh laporan PDF Realisasi ROW & foto (ZIP) — format sama dengan dashboard (Monitoring ROW) ----- */
+var LOGO_PLN_LAPORAN = 'data:image/png;base64,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';
+var KOP_LAPORAN_ROW = ['PT PLN (PERSERO)', 'UID SULSELRABAR', 'UP3 KENDARI', 'ULP KOLAKA UTARA'];
+var JUDUL_LAPORAN_ROW = ['REALISASI ROW', 'ULP KOLAKA UTARA'];
+
+function htmlTombolUnduh(awal) {
+  return '<div class="tombol-unduh"><button class="tombol tombol-kecil" type="button" id="' + awal + '-pdf">⬇ PDF realisasi</button>' +
+    '<button class="tombol tombol-kecil" type="button" id="' + awal + '-zip">⬇ Foto (ZIP)</button></div><p class="catatan" id="' + awal + '-status" role="status"></p>';
+}
+function pasangTombolUnduh(awal, ambilDaftar) {
+  ['pdf', 'zip'].forEach(function (j) {
+    var b = document.getElementById(awal + '-' + j); if (!b) return;
+    b.onclick = function () { unduhLaporanHp(ambilDaftar(), b, document.getElementById(awal + '-status'), j); };
+  });
+}
+
+/** Isi laporan satu WO selesai ({wo, st}) — bentuk sama dengan isiLaporanRow di dashboard. */
+function laporanWoHp(x) {
+  var wo = x.wo, s = x.st, rg = dataRegu(wo.REGU), rr = realisasiWo(wo.ID).filter(function (r) { return !r.antre; });
+  var hari = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  var bln = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+  var dt = new Date(wo.TANGGAL + 'T00:00:00');
+  var koor = rg ? rg.koordinator : '';
+  var hadir = s.mulai && s.mulai.hadir ? String(s.mulai.hadir).split(/\s*,\s*/).filter(Boolean) : null;
+  var anggota = (hadir || (rg ? rg.anggota : [])).filter(function (n) { return String(n).toLowerCase() !== String(koor || '').toLowerCase(); });
+  var titikAbsen = function (a) { return a ? { koordinat: a.koordinat || '', jam: jamDari(a.waktu), foto: a.foto || '' } : null; };
+  var tebang = function (r) { return apakahTebang(r.jenis); };
+  var titik = function (r, i) {
+    return { no: i + 1, koordinat: r.koordinat || '', jam: jamDari(r.waktu), keterangan: r.keterangan || '', temuan: r.idTemuan || '',
+      sebelum: r.fotoSebelum || '', sesudah: r.fotoSesudah || '', ukur: r.fotoUkur || '' };
+  };
+  var g = s.gawang === '' || s.gawang === null || s.gawang === undefined ? null : +s.gawang;
+  return {
+    wo: wo,
+    info: [['HARI / TANGGAL', isNaN(dt) ? wo.TANGGAL : hari[dt.getDay()] + ', ' + dt.getDate() + ' ' + bln[dt.getMonth()] + ' ' + dt.getFullYear()],
+      ['PENYULANG', wo.PENYULANG || ''], ['SECTION / SEGMENT', wo['SECTION/SEGMEN'] || ''], ['PELAKSANA PEKERJAAN', rg ? rg.vendor || '' : ''],
+      ['NAMA PELAKSANA', wo.REGU || ''], ['- KOORDINATOR', koor || ''], ['- ANGGOTA', anggota.join(', ')]],
+    target: { kms: +wo['TARGET PEMANGKASAN (KMS)'] || 0, btg: +wo['TARGET PENEBANGAN (BTG)'] || 0 },
+    realisasi: { kms: g === null ? 0 : g * meterGawang() / 1000, btg: rr.filter(tebang).length, gawang: g },
+    start: titikAbsen(s.mulai), selesai: titikAbsen(s.selesai),
+    pangkas: rr.filter(function (r) { return !tebang(r); }).map(titik), tebang: rr.filter(tebang).map(titik)
+  };
+}
+function daftarFotoLaporan(lap) {
+  var hasil = [], dua = function (n) { return (n < 10 ? '0' : '') + n; };
+  if (lap.start && lap.start.foto) hasil.push({ id: lap.start.foto, nama: '00_titik_start' });
+  lap.pangkas.forEach(function (t) {
+    if (t.sebelum) hasil.push({ id: t.sebelum, nama: 'pemangkasan_' + dua(t.no) + '_sebelum' });
+    if (t.sesudah) hasil.push({ id: t.sesudah, nama: 'pemangkasan_' + dua(t.no) + '_sesudah' });
+  });
+  lap.tebang.forEach(function (t) {
+    if (t.sebelum) hasil.push({ id: t.sebelum, nama: 'penebangan_' + dua(t.no) + '_sebelum' });
+    if (t.sesudah) hasil.push({ id: t.sesudah, nama: 'penebangan_' + dua(t.no) + '_sesudah' });
+    if (t.ukur) hasil.push({ id: t.ukur, nama: 'penebangan_' + dua(t.no) + '_pengukuran' });
+  });
+  if (lap.selesai && lap.selesai.foto) hasil.push({ id: lap.selesai.foto, nama: '99_titik_selesai' });
+  return hasil;
+}
+function namaBerkasLaporan(wo, awalan) {
+  var bersih = function (v) { return String(v || '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); };
+  return [awalan, wo.TANGGAL, bersih(wo.REGU), bersih(wo.PENYULANG), bersih(wo['SECTION/SEGMEN'])].filter(Boolean).join('_');
+}
+
+function muatPustaka(url, ambil) {
+  S.pustaka = S.pustaka || {};
+  if (ambil()) return Promise.resolve(ambil());
+  if (S.pustaka[url]) return S.pustaka[url];
+  S.pustaka[url] = new Promise(function (ok, gagal) {
+    var js = document.createElement('script'); js.src = url;
+    js.onload = function () { ambil() ? ok(ambil()) : gagal(new Error('Pustaka tidak termuat.')); };
+    js.onerror = function () { S.pustaka[url] = null; gagal(new Error('Pustaka unduhan tidak bisa dimuat (perlu sinyal internet).')); };
+    document.head.appendChild(js);
+  });
+  return S.pustaka[url];
+}
+function fotoKeJpeg(url, maks) {
+  return new Promise(function (ok, gagal) {
+    var img = new Image();
+    img.onload = function () {
+      var sk = Math.min(1, maks / Math.max(img.naturalWidth, img.naturalHeight)), c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * sk)); c.height = Math.max(1, Math.round(img.naturalHeight * sk));
+      var ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+      ok({ data: c.toDataURL('image/jpeg', 0.82), w: c.width, h: c.height });
+    };
+    img.onerror = function () { gagal(new Error('Foto tidak bisa dibaca.')); };
+    img.src = url;
+  });
+}
+async function ambilFotoLaporan(ids, maks, kemajuan) {
+  var unik = ids.filter(function (id, i) { return id && ids.indexOf(id) === i; }), hasil = {}, selesai = 0, antre = unik.slice();
+  var pekerja = async function () {
+    while (antre.length) {
+      var id = antre.shift();
+      try {
+        var url = S.foto[id] && S.foto[id].data;
+        if (!url) { var f = await api('fotoInspeksi', { fileId: id }); url = 'data:' + f.mime + ';base64,' + f.data; S.foto[id] = { data: url }; }
+        hasil[id] = await fotoKeJpeg(url, maks);
+      } catch (e) { hasil[id] = null; }
+      selesai++; kemajuan(selesai, unik.length);
+    }
+  };
+  await Promise.all([pekerja(), pekerja(), pekerja()]);
+  return hasil;
+}
+
+function teksPdfAman(t) {
+  return String(t === null || t === undefined ? '' : t).replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-').replace(/…/g, '...').replace(/[\r\t]/g, ' ').replace(/[^\n\x20-\x7E\xA0-\xFF]/g, '');
+}
+function halamanPdfRow(Lib, doc, h) {
+  var H = 841.89, page = doc.addPage([595.28, H]), hitam = Lib.rgb(0, 0, 0);
+  var lebar = function (t, uk, tebal) { return (tebal ? h.tebal : h.biasa).widthOfTextAtSize(t, uk); };
+  return {
+    teks: function (t, x, y, o) {
+      o = o || {}; t = teksPdfAman(t); if (!t) return;
+      var uk = o.uk || 8.5, f = o.tebal ? h.tebal : h.biasa, w = f.widthOfTextAtSize(t, uk);
+      page.drawText(t, { x: o.align === 'center' ? x - w / 2 : x, y: H - y, size: uk, font: f, color: o.abu ? Lib.rgb(0.47, 0.47, 0.47) : hitam });
+    },
+    kotak: function (x, y, w, tg) { page.drawRectangle({ x: x, y: H - y - tg, width: w, height: tg, borderColor: hitam, borderWidth: 0.6 }); },
+    gambar: function (img, x, y, w, tg) { page.drawImage(img, { x: x, y: H - y - tg, width: w, height: tg }); },
+    pecah: function (t, maks, uk, tebal) {
+      var hasil = [];
+      teksPdfAman(t).split('\n').forEach(function (par) {
+        var baris = '';
+        par.split(' ').forEach(function (kata) {
+          var coba = baris ? baris + ' ' + kata : kata;
+          if (lebar(coba, uk, tebal) <= maks || !baris) baris = coba; else { hasil.push(baris); baris = kata; }
+          while (lebar(baris, uk, tebal) > maks && baris.length > 1) {
+            var n = baris.length; while (n > 1 && lebar(baris.slice(0, n), uk, tebal) > maks) n--;
+            hasil.push(baris.slice(0, n)); baris = baris.slice(n);
+          }
+        });
+        hasil.push(baris);
+      });
+      return hasil;
+    }
+  };
+}
+function gambarLaporanPdf(Lib, doc, h, lap, foto, logo) {
+  var L = 40, R = 555, W = R - L, BAWAH = 800, y, hal;
+  var halamanBaru = function () {
+    hal = halamanPdfRow(Lib, doc, h);
+    if (logo) hal.gambar(logo, L, 26, 24, 32);
+    KOP_LAPORAN_ROW.forEach(function (t, i) { hal.teks(t, L + 30, 33 + i * 8.6, { tebal: true, uk: 8 }); });
+    y = 76;
+  };
+  halamanBaru();
+  JUDUL_LAPORAN_ROW.forEach(function (t, i) { hal.teks(t, (L + R) / 2, 88 + i * 15, { tebal: true, uk: 12, align: 'center' }); });
+  y = 130; var yKiri = y;
+  lap.info.forEach(function (b) {
+    var ind = b[0].charAt(0) === '-' ? 14 : 0;
+    hal.teks(b[0], L + 10 + ind, yKiri); hal.teks(':', L + 125, yKiri);
+    var baris = hal.pecah(b[1] || '-', 150, 8.5);
+    baris.forEach(function (t, i) { hal.teks(t, L + 132, yKiri + i * 11); });
+    yKiri += 11 * Math.max(1, baris.length);
+  });
+  var xk = 320, yk = y;
+  var kanan = function (label, nilai, tebal) { hal.teks(label, xk, yk, { tebal: tebal }); if (nilai !== undefined) { hal.teks(':', xk + 128, yk); hal.teks(nilai, xk + 135, yk); } yk += 11; };
+  kanan('TARGET', undefined, true);
+  kanan('-  PEMANGKASAN (KMS)', angkaId(lap.target.kms, 2)); kanan('-  PENEBANGAN (BTG)', angkaId(lap.target.btg));
+  kanan('REALISASI', undefined, true);
+  kanan('-  PEMANGKASAN (KMS)', angkaId(lap.realisasi.kms, 2) + (lap.realisasi.gawang !== null ? ' (' + angkaId(lap.realisasi.gawang) + ' gawang)' : ''));
+  kanan('-  PENEBANGAN (BTG)', angkaId(lap.realisasi.btg));
+  y = Math.max(yKiri, yk) + 12;
+  var kotakFoto = function (id, x, yy, w, tg, label) {
+    hal.kotak(x, yy, w, tg); hal.teks(label, x + w / 2, yy + 11, { tebal: true, uk: 7.5, align: 'center' });
+    var f = id ? foto[id] : null, pad = 5, atas = 16;
+    if (f) {
+      var mw = w - pad * 2, mh = tg - atas - pad, sk = Math.min(mw / f.width, mh / f.height), iw = f.width * sk, ih = f.height * sk;
+      hal.gambar(f, x + (w - iw) / 2, yy + atas + (mh - ih) / 2, iw, ih);
+    } else hal.teks(id ? '(foto gagal dimuat)' : '(tidak ada foto)', x + w / 2, yy + tg / 2 + 4, { uk: 7.5, align: 'center', abu: true });
+  };
+  var kotakTeks = function (x, yy, w, tg, judulSel, isi) {
+    hal.kotak(x, yy, w, tg);
+    var bj = hal.pecah(judulSel, w - 12, 8, true);
+    bj.forEach(function (t, i) { hal.teks(t, x + 6, yy + 14 + i * 10, { tebal: true, uk: 8 }); });
+    hal.pecah(isi.filter(Boolean).join('\n') || '-', w - 12, 8).slice(0, Math.floor((tg - 20 - bj.length * 10) / 10))
+      .forEach(function (t, i) { hal.teks(t, x + 6, yy + 16 + bj.length * 10 + i * 10, { uk: 8 }); });
+  };
+  var muat = function (tinggi) { if (y + tinggi > BAWAH) halamanBaru(); };
+  var hAbs = 130, kiriW = W / 2;
+  [['START', lap.start], ['SELESAI', lap.selesai]].forEach(function (p) {
+    muat(hAbs);
+    kotakTeks(L, y, kiriW, hAbs, 'TITIK KOORDINAT ' + p[0] + ' :', p[1] ? [p[1].koordinat, p[1].jam ? 'Jam ' + p[1].jam : ''] : ['Belum ada data ' + p[0].toLowerCase()]);
+    kotakFoto(p[1] ? p[1].foto : '', L + kiriW, y, W - kiriW, hAbs, 'FOTO TITIK ' + p[0]);
+    y += hAbs;
+  });
+  y += 18;
+  var bagian = function (judulB, daftar, kolom) {
+    muat(40);
+    hal.teks(judulB, L, y, { tebal: true, uk: 9 }); y += 6;
+    if (!daftar.length) { hal.kotak(L, y, W, 24); hal.teks('Tidak ada realisasi.', L + 6, y + 15, { uk: 8 }); y += 44; return; }
+    var hB = 118;
+    daftar.forEach(function (t) {
+      if (y + hB > BAWAH) { halamanBaru(); hal.teks(judulB + ' (lanjutan)', L, y, { tebal: true, uk: 9 }); y += 6; }
+      var x = L, wKoor = kolom.length === 2 ? 175 : 130, wF = (W - wKoor) / kolom.length;
+      kotakTeks(x, y, wKoor, hB, 'TITIK KOORDINAT ' + t.no + ' :', [t.koordinat || '(koordinat kosong)', t.jam ? 'Jam ' + t.jam : '', t.keterangan, t.temuan ? 'Temuan: ' + t.temuan : '']);
+      x += wKoor;
+      kolom.forEach(function (k) { kotakFoto(t[k[0]], x, y, wF, hB, k[1] + ' ' + t.no); x += wF; });
+      y += hB;
+    });
+    y += 20;
+  };
+  bagian('REALISASI PEMANGKASAN', lap.pangkas, [['sebelum', 'FOTO SEBELUM'], ['sesudah', 'FOTO SESUDAH']]);
+  bagian('REALISASI PENEBANGAN', lap.tebang, [['sebelum', 'FOTO SEBELUM'], ['sesudah', 'FOTO SESUDAH'], ['ukur', 'FOTO PENGUKURAN']]);
+}
+
+/** Simpan / bagikan berkas di HP. */
+function simpanBerkasHp(blob, nama, status) {
+  var url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = nama; document.body.appendChild(a); a.click(); a.remove();
+  var bisaBagi = false;
+  try { bisaBagi = !!(navigator.canShare && navigator.canShare({ files: [new File([blob], nama, { type: blob.type })] })); } catch (e) { bisaBagi = false; }
+  if (status) {
+    status.innerHTML = '✅ ' + esc(nama) + ' · <a href="' + url + '" download="' + esc(nama) + '">unduh lagi</a>' + (bisaBagi ? ' · <button class="tombol-teks" type="button">Bagikan (WA, dll.)</button>' : '');
+    var b = status.querySelector('button');
+    if (b) b.onclick = function () { navigator.share({ files: [new File([blob], nama, { type: blob.type })], title: nama }).catch(function () {}); };
+  }
+  setTimeout(function () { URL.revokeObjectURL(url); }, 10 * 60000);
+}
+
+/** daftar: [{wo, st}] WO selesai; jenis 'pdf' | 'zip'. */
+async function unduhLaporanHp(daftar, tombol, status, jenis) {
+  if (!daftar.length || tombol.disabled) return;
+  if (!navigator.onLine) { toast('Unduh laporan perlu sinyal internet (foto diambil dari server).'); return; }
+  var lapor = function (t) { if (status) status.textContent = t; };
+  var teksAwal = tombol.textContent; tombol.disabled = true;
+  try {
+    var laporan = daftar.map(laporanWoHp), ids = [];
+    laporan.forEach(function (l) { daftarFotoLaporan(l).forEach(function (f) { ids.push(f.id); }); });
+    var satu = laporan.length === 1;
+    var nama = satu ? namaBerkasLaporan(laporan[0].wo, jenis === 'pdf' ? 'Realisasi_ROW' : 'Foto_ROW') :
+      (jenis === 'pdf' ? 'Realisasi_ROW_' : 'Foto_ROW_') + laporan[0].wo.TANGGAL + (S.saringRegu ? '_' + String(S.saringRegu).replace(/[^A-Za-z0-9]+/g, '-') : '');
+    lapor('Memuat pustaka…');
+    var Lib = jenis === 'pdf' ? await muatPustaka('https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js', function () { return window.PDFLib; })
+      : await muatPustaka('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', function () { return window.JSZip; });
+    var foto = await ambilFotoLaporan(ids, jenis === 'pdf' ? 1000 : 1600, function (a, n) { lapor('Mengambil foto ' + a + '/' + n + '…'); });
+    lapor('Menyusun ' + (jenis === 'pdf' ? 'PDF' : 'ZIP') + '…');
+    if (jenis === 'pdf') {
+      var doc = await Lib.PDFDocument.create(); doc.setTitle(nama); doc.setCreator('MOTAHA Inspeksi ULP Kolaka Utara');
+      var h = { biasa: await doc.embedFont(Lib.StandardFonts.Helvetica), tebal: await doc.embedFont(Lib.StandardFonts.HelveticaBold) };
+      var logo = null; try { logo = await doc.embedPng(LOGO_PLN_LAPORAN); } catch (e) { logo = null; }
+      var tertanam = {};
+      for (var id in foto) { if (foto[id]) { try { tertanam[id] = await doc.embedJpg(foto[id].data); } catch (e) { /* lewati */ } } }
+      laporan.forEach(function (l) { gambarLaporanPdf(Lib, doc, h, l, tertanam, logo); });
+      var hal = doc.getPages(), dicetak = 'Dicetak dari MOTAHA Inspeksi - ' + waktuLokal().slice(0, 16);
+      hal.forEach(function (pg, i) {
+        var abu = Lib.rgb(0.47, 0.47, 0.47), t = 'Halaman ' + (i + 1) + ' dari ' + hal.length;
+        pg.drawText(dicetak, { x: 40, y: 20, size: 7, font: h.biasa, color: abu });
+        pg.drawText(t, { x: 555 - h.biasa.widthOfTextAtSize(t, 7), y: 20, size: 7, font: h.biasa, color: abu });
+      });
+      simpanBerkasHp(new Blob([await doc.save()], { type: 'application/pdf' }), nama + '.pdf', status);
+    } else {
+      var zip = new Lib(), jumlah = 0;
+      laporan.forEach(function (l) {
+        var folder = satu ? zip : zip.folder(namaBerkasLaporan(l.wo, 'WO'));
+        daftarFotoLaporan(l).forEach(function (f) { var g = foto[f.id]; if (g) { folder.file(f.nama + '.jpg', g.data.split(',')[1], { base64: true }); jumlah++; } });
+      });
+      if (!jumlah) throw new Error('Belum ada foto untuk diunduh.');
+      simpanBerkasHp(await zip.generateAsync({ type: 'blob' }), nama + '.zip', status);
+    }
+  } catch (e) { lapor('Gagal: ' + e.message); }
+  tombol.disabled = false; tombol.textContent = teksAwal;
+}
+
 /* ----- Menu Realisasi: WO yang sudah Selesai (7 hari terakhir) ----- */
 function gambarRealisasiHp(isi) {
   var d = S.dataRow;
@@ -1398,16 +1664,25 @@ function gambarRealisasiHp(isi) {
       '<h1>' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '</h1><p class="sub">' + esc(tglTampil(wo.TANGGAL) + ' · ' + wo.REGU + (rg ? ' · ' + rg.vendor : '')) + '</p>' +
       '<div class="panel">' + htmlLini(s.catatan) +
       (s.mulai && s.mulai.hadir ? '<p class="catatan">Hadir: ' + esc(s.mulai.hadir) + (s.mulai.tidakHadir ? ' · Tidak hadir: ' + esc(s.mulai.tidakHadir) : '') + '</p>' : '') +
-      htmlRingkasWo(wo, s.gawang, 'Realisasi vs target (' + esc(teksTarget(wo)) + ')') + '</div>' +
+      htmlRingkasWo(wo, s.gawang, 'Realisasi vs target (' + esc(teksTarget(wo)) + ')') + htmlTombolUnduh('rl') + '</div>' +
       '<h2 class="judul-bagian">Titik realisasi</h2>' + htmlTitikRealisasi(realisasiWo(wo.ID), true);
     $('#rl-kembali').onclick = function () { S.detailReal = null; gambar(); window.scrollTo(0, 0); };
+    pasangTombolUnduh('rl', function () { return [detail]; });
     pasangFotoServer();
     return;
   }
   var tampil = selesai.filter(function (x) { return !saring || x.wo.REGU === saring; });
-  isi.innerHTML = '<h1>Realisasi ROW</h1><p class="sub">Pekerjaan ROW yang sudah Selesai, 7 hari terakhir.</p>' +
+  // Unduh laporan harian: pilih tanggal (dari WO selesai yang tampil).
+  var tanggalAda = []; tampil.forEach(function (x) { if (tanggalAda.indexOf(x.wo.TANGGAL) === -1) tanggalAda.push(x.wo.TANGGAL); });
+  tanggalAda.sort().reverse();
+  var tglUnduh = tanggalAda.indexOf(S.tglUnduhRow) !== -1 ? S.tglUnduhRow : tanggalAda[0];
+  var woHarian = tampil.filter(function (x) { return x.wo.TANGGAL === tglUnduh; });
+  isi.innerHTML = '<h1>Realisasi ROW</h1><p class="sub">Pekerjaan ROW yang sudah Selesai, 7 hari terakhir.</p>' + htmlPesan() +
     (Object.keys(reguAda).length > 1 ? '<div class="medan"><select id="rl-regu"><option value="">Semua regu</option>' + Object.keys(reguAda).sort().map(function (n) {
       return '<option value="' + esc(n) + '"' + (n === saring ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></div>' : '') +
+    (tanggalAda.length ? '<div class="panel panel-unduh"><b>Unduh realisasi harian</b><div class="medan" style="margin:8px 0"><select id="rl-tgl" aria-label="Tanggal laporan">' +
+      tanggalAda.map(function (t) { return '<option value="' + esc(t) + '"' + (t === tglUnduh ? ' selected' : '') + '>' + esc(tglTampil(t)) + '</option>'; }).join('') + '</select></div>' +
+      '<p class="catatan">' + woHarian.length + ' WO selesai' + (saring ? ' · ' + esc(saring) : '') + '. PDF: satu halaman per WO (format laporan Realisasi ROW).</p>' + htmlTombolUnduh('rh') + '</div>' : '') +
     (tampil.length ? tampil.map(function (x) {
       var wo = x.wo, rr = realisasiWo(wo.ID), nTebang = rr.filter(function (r) { return apakahTebang(r.jenis); }).length;
       var kms = x.st.gawang !== '' && x.st.gawang !== undefined && x.st.gawang !== null ? angkaId(+x.st.gawang * meterGawang() / 1000, 2) + ' kms' : '—';
@@ -1418,6 +1693,8 @@ function gambarRealisasiHp(isi) {
         (x.st.selesai.antre ? '<span class="tag tag-tunggu">Belum terkirim</span>' : '') + '</div></button>';
     }).join('') : '<div class="kosong-daftar">Belum ada WO yang selesai dalam 7 hari terakhir.</div>');
   if ($('#rl-regu')) $('#rl-regu').onchange = function () { S.saringRegu = $('#rl-regu').value; gambar(); };
+  if ($('#rl-tgl')) $('#rl-tgl').onchange = function () { S.tglUnduhRow = $('#rl-tgl').value; gambar(); };
+  pasangTombolUnduh('rh', function () { return woHarian; });
   Array.prototype.forEach.call(document.querySelectorAll('[data-real]'), function (b) {
     b.onclick = function () { S.detailReal = b.getAttribute('data-real'); gambar(); window.scrollTo(0, 0); };
   });
