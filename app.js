@@ -6,8 +6,8 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-10.6';
-var VERSI_SERVER_MIN = '2026-10-10.6'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
+var VERSI_PWA = '2026-10-12.8';
+var VERSI_SERVER_MIN = '2026-10-12.8'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -694,7 +694,8 @@ function gambarInspeksiWo(isi) {
   var nSelesai = ini.filter(function (x) { return x.s.status === 'selesai'; }).length;
   var nJalan = ini.filter(function (x) { return x.s.status === 'berjalan'; }).length;
   var daftar = function (arr) { return arr.map(function (x) { return kartuWoIns(x.w); }).join(''); };
-  isi.innerHTML = '<h1>Inspeksi · ' + esc(tglTampil(t)) + '</h1><p class="sub">Pilih WO (rencana inspeksi) yang akan dijalankan.</p>' + htmlPesan() +
+  isi.innerHTML = '<h1>Inspeksi · ' + esc(tglTampil(t)) + '</h1><p class="sub">' + (S.data.yantek ? 'WO untuk <b>' + esc(S.data.yantek) + '</b>.' : 'Pilih WO (rencana inspeksi) yang akan dijalankan.') + '</p>' + htmlPesan() +
+    (S.data.wo !== undefined && !S.data.yantek ? '<div class="pesan pesan-info">Akun ini belum dihubungkan ke petugas Yantek, jadi semua WO ditampilkan. Admin bisa mengaturnya di dashboard (Kelola Pengguna → Petugas yantek).</div>' : '') +
     (S.data.wo === undefined ? '<div class="pesan pesan-galat">Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN + '. Hubungi admin, lalu buka menu akun → Perbarui data.</div>' : '') +
     '<div class="ringkas-wo"><div><small>WO hari ini</small><b>' + ini.length + '</b></div><div class="ok"><small>Selesai</small><b>' + nSelesai + '</b></div>' +
     '<div class="blm"><small>Belum selesai</small><b>' + (ini.length - nSelesai) + '</b>' + (nJalan ? '<small>' + nJalan + ' sedang inspeksi</small>' : '') + '</div></div>' +
@@ -1215,6 +1216,7 @@ function htmlFormAbsen(wo) {
             return '<button type="button" class="pil' + (v === al ? ' aktif' : '') + '" data-alasan="' + esc(n) + '" data-nilai="' + esc(al) + '">' + esc(al) + '</button>';
           }).join('') + '</div>') + '</div>';
       }).join('') +
+      htmlFoto('a-foto', 'Foto titik start', true, a.foto) +
       '<label class="cek-hadir konfirmasi"><input type="checkbox" id="a-yakin"' + (a.yakin ? ' checked' : '') + '><span>Saya mengonfirmasi data kehadiran di atas benar.</span></label>' +
       '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Mulai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
   }
@@ -1223,6 +1225,7 @@ function htmlFormAbsen(wo) {
     '<div class="medan"><label for="a-gawang">Jumlah gawang dipangkas <span class="wajib">*</span></label>' +
     '<input id="a-gawang" type="number" min="0" step="1" inputmode="numeric" value="' + esc(g) + '" placeholder="0">' +
     '<p class="catatan" id="a-kms">' + meterGawang() + ' m per gawang · isi 0 bila tidak ada pemangkasan</p></div>' +
+    htmlFoto('a-foto', 'Foto titik selesai', true, a.foto) +
     '<div class="absen-tombol"><button class="tombol-utama" type="button" id="a-simpan">Selesai</button><button class="tombol" type="button" id="a-batal">Batal</button></div></div>';
 }
 
@@ -1278,6 +1281,8 @@ function pasangDetailWo(wo) {
     el.onclick = function () { a.hadir[el.getAttribute('data-alasan')] = el.getAttribute('data-nilai'); gambar(); };
   });
   if ($('#a-yakin')) $('#a-yakin').onchange = function () { a.yakin = $('#a-yakin').checked; };
+  // Foto titik start / selesai (wajib) — dipakai di laporan PDF Realisasi ROW.
+  pasangFoto('a-foto', function (g) { a.foto = g; gambar(); }, 'ROW · ' + (a.jenis === 'MULAI' ? 'Start' : 'Selesai') + ' · ' + wo.REGU, wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']);
   if ($('#a-gawang')) $('#a-gawang').oninput = function () {
     a.gawang = $('#a-gawang').value;
     var lama = document.querySelector('#f-absen .ringkas-realisasi'), wadah = document.createElement('div');
@@ -1293,13 +1298,15 @@ function pasangDetailWo(wo) {
       var tanpa = tidak.filter(function (n) { return !a.hadir[n]; });
       if (!hadir.length) { toast('Centang minimal satu pelaksana yang hadir.'); return; }
       if (tanpa.length) { toast('Pilih alasan tidak hadir untuk: ' + tanpa.join(', ')); return; }
+      if (!a.foto) { toast('Ambil foto titik start.'); return; }
       if (!a.yakin) { toast('Centang konfirmasi kehadiran.'); return; }
-      catatAbsen(wo, 'MULAI', { hadir: hadir, tidakHadir: tidak.map(function (n) { return { nama: n, alasan: a.hadir[n] }; }) });
+      catatAbsen(wo, 'MULAI', { hadir: hadir, tidakHadir: tidak.map(function (n) { return { nama: n, alasan: a.hadir[n] }; }), foto: { mime: a.foto.mime, data: a.foto.data } });
     } else {
       var g = a.gawang;
       if (g === '' || !(+g >= 0) || +g !== Math.round(+g)) { toast('Isi jumlah gawang (bilangan bulat, 0 bila tidak ada).'); return; }
+      if (!a.foto) { toast('Ambil foto titik selesai.'); return; }
       if (!confirm('Selesaikan WO ' + wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'] + ' dengan ' + g + ' gawang? Setelah Selesai, WO tidak bisa dimulai lagi.')) return;
-      catatAbsen(wo, 'SELESAI', { gawang: +g });
+      catatAbsen(wo, 'SELESAI', { gawang: +g, foto: { mime: a.foto.mime, data: a.foto.data } });
     }
   };
 }
