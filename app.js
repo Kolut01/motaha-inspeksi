@@ -6,7 +6,7 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-12.10';
+var VERSI_PWA = '2026-10-17.1';
 var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
@@ -17,7 +17,7 @@ var S = {
   api: '', sesi: null, data: null, antrean: [], tab: 'input', draf: null, detail: null, eks: null,
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
   cari: '', saringPy: '', terakhirKirim: null, pembaruan: null, tlMode: 'belum', foto: {},
-  dataRow: null, drafRow: null, pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: '',
+  dataRow: null, drafRow: null, drafRows: [], pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: '',
   woIns: null, insForm: false, woForm: null
 };
 
@@ -995,10 +995,31 @@ function apakahTebang(jenis) { return ((S.dataRow && S.dataRow.pilihan.pengukura
 function jamDari(w) { return String(w || '').slice(11, 16); }
 
 function drafRowBaru(idRencana, mode, idTemuan) {
-  return { idRencana: idRencana || '', mode: mode || '', idTemuan: idTemuan ? [idTemuan] : [], jenis: '',
-    koordinat: '', keterangan: '', fotoSebelum: null, fotoSesudah: null, fotoPengukuran: null };
+  return { kunci: 'D' + Date.now().toString(36) + hex(2), idRencana: idRencana || '', mode: mode || '', idTemuan: idTemuan ? [idTemuan] : [], jenis: '',
+    koordinat: '', keterangan: '', fotoSebelum: null, fotoSesudah: null, fotoPengukuran: null, dibuat: waktuLokal() };
 }
-function simpanDrafRow() { DB.taruh('drafRow', S.drafRow).catch(function () {}); }
+/*
+ * Draf realisasi ROW: beberapa draf boleh berjalan bersamaan (satu per temuan, dan beberapa "di luar temuan"),
+ * jadi petugas bisa mulai temuan berikutnya tanpa menyelesaikan / menyimpan temuan pertama. Semua draf disimpan
+ * di HP (IndexedDB 'drafRows'); S.drafRow = draf yang sedang dibuka di form.
+ */
+function drafBerisi(f) { return !!(f && (f.jenis || f.fotoSebelum || f.fotoSesudah || f.fotoPengukuran || f.keterangan)); }
+function drafWo(idRencana) { return S.drafRows.filter(function (f) { return f.idRencana === idRencana; }); }
+function drafTemuan(idRencana, idTemuan) { return S.drafRows.filter(function (f) { return f.idRencana === idRencana && f.mode === 'temuan' && f.idTemuan[0] === idTemuan; })[0] || null; }
+function simpanDrafRow() {
+  if (S.drafRow && S.drafRow.idRencana && S.drafRows.indexOf(S.drafRow) === -1) S.drafRows.push(S.drafRow);
+  DB.taruh('drafRows', S.drafRows).catch(function () {});
+}
+function buangDrafRow(f) {
+  S.drafRows = S.drafRows.filter(function (x) { return x !== f && x.kunci !== f.kunci; });
+  if (S.drafRow === f) S.drafRow = drafRowBaru();
+  DB.taruh('drafRows', S.drafRows).catch(function () {});
+}
+/** Keluar dari form: draf kosong (belum ada isian / foto) tidak disimpan. */
+function tutupFormRow() {
+  if (S.drafRow && !drafBerisi(S.drafRow)) buangDrafRow(S.drafRow); else simpanDrafRow();
+  S.formRow = false;
+}
 
 function cariWo(id) { return ((S.dataRow && S.dataRow.rencana) || []).filter(function (r) { return r.ID === id; })[0] || null; }
 function woHariIni() {
@@ -1172,7 +1193,7 @@ function gambarDetailWo(isi, wo) {
     else if (s.status === 'berjalan') tombol = '<button class="tombol-utama tombol-istirahat" type="button" id="w-istirahat">Istirahat</button><button class="tombol" type="button" id="w-selesai">Selesai</button>';
     else if (s.status === 'istirahat') tombol = '<button class="tombol-utama" type="button" id="w-lanjut">Mulai lagi</button><button class="tombol" type="button" id="w-selesai">Selesai</button>';
   }
-  var adaDraf = f && f.idRencana === wo.ID && (f.fotoSebelum || f.fotoSesudah || f.jenis);
+  var drafIni = drafWo(wo.ID).filter(drafBerisi);
   isi.innerHTML = '<button class="tombol-kembali" type="button" id="w-kembali">‹ Semua WO</button>' +
     '<h1>' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '</h1>' + htmlPesan() +
     '<div class="panel"><div class="tags">' + tagStatusWo(s.status) + '</div>' +
@@ -1196,10 +1217,22 @@ function gambarDetailWo(isi, wo) {
           (t['KETERANGAN'] ? '<div class="kartu-ket">' + esc(t['KETERANGAN']) + '</div>' : '') +
           '<div class="kartu-ket">' + esc(t['RENCANA TINDAK LANJUT'] || '') + (t['KOORDINAT'] ? ' · ' + esc(t['KOORDINAT']) : '') + '</div>' +
           htmlFotoServer(t._fotoTemuan, 'Foto temuan') +
-          (jalan ? '<button class="tombol tombol-kecil" type="button" data-real-temuan="' + esc(t.ID) + '">Input realisasi temuan ini</button>' : '') + '</div>';
+          (function () {
+            var df = drafTemuan(wo.ID, t.ID), ada = drafBerisi(df);
+            return (ada ? '<div class="tags"><span class="tag tag-draf">✎ Draf tersimpan di HP</span></div>' : '') +
+              (jalan ? '<button class="tombol tombol-kecil" type="button" data-real-temuan="' + esc(t.ID) + '">' + (ada ? 'Lanjutkan realisasi temuan ini' : 'Input realisasi temuan ini') + '</button>' : '');
+          })() + '</div>';
       }).join('') : '<div class="kosong-daftar">Tidak ada temuan inspeksi ROW yang belum dieksekusi di ' + esc(wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN']) + '.</div>') +
       (jalan ? '<button class="tombol tombol-lebar" type="button" id="w-luar">+ Realisasi di luar temuan inspeksi</button>' : '') +
-      (jalan && adaDraf ? '<button class="tombol tombol-lebar" type="button" id="w-draf">Lanjutkan draf realisasi</button>' : '')
+      (drafIni.length ? '<h2 class="judul-bagian">Draf realisasi belum disimpan (' + drafIni.length + ')</h2>' +
+        '<p class="catatan">Beberapa temuan boleh dikerjakan bersamaan — draf tersimpan di HP sampai ditekan <b>Simpan realisasi</b>.</p>' +
+        drafIni.map(function (df) {
+          var nFoto = [df.fotoSebelum, df.fotoSesudah, df.fotoPengukuran].filter(Boolean).length;
+          return '<div class="kartu kartu-draf"><div class="kartu-judul">' + esc(df.mode === 'temuan' ? 'Temuan ' + (df.idTemuan[0] || '') : 'Di luar temuan inspeksi') + '</div>' +
+            '<div class="kartu-ket">' + esc((df.jenis || 'jenis belum dipilih') + ' · ' + nFoto + ' foto' + (df.dibuat ? ' · dibuat ' + jamDari(df.dibuat) : '')) + '</div>' +
+            '<div class="absen-tombol">' + (jalan ? '<button class="tombol tombol-kecil" type="button" data-draf="' + esc(df.kunci) + '">Lanjutkan</button>' : '') +
+            '<button class="tombol tombol-kecil" type="button" data-draf-hapus="' + esc(df.kunci) + '">Hapus draf</button></div></div>';
+        }).join('') : '')
       : '') +
     (s.status !== 'belum' ? '<h2 class="judul-bagian">Realisasi WO ini (' + rr.length + ')</h2>' + htmlTitikRealisasi(rr, false) : '');
   pasangDetailWo(wo);
@@ -1251,15 +1284,14 @@ async function catatAbsen(wo, jenis, tambahan) {
   gambar(); window.scrollTo(0, 0); kirimAntrean();
 }
 
+/** Buka form realisasi: temuan → draf temuan itu (dibuat bila belum ada); di luar temuan → draf baru. Draf lain tetap tersimpan. */
 function bukaFormRealisasi(wo, mode, idTemuan) {
-  var f = S.drafRow, sama = f && f.idRencana === wo.ID && f.mode === mode && (f.idTemuan[0] || '') === (idTemuan || '');
-  var berisi = f && (f.fotoSebelum || f.fotoSesudah || f.fotoPengukuran);
-  if (!sama) {
-    if (berisi && !confirm('Draf realisasi sebelumnya (dengan foto) akan diganti. Lanjutkan?')) return;
-    S.drafRow = drafRowBaru(wo.ID, mode, idTemuan);
-    if (idTemuan) { var t = cariTemuan(idTemuan); if (t && t.KOORDINAT) S.drafRow.koordinat = t.KOORDINAT; }
-    simpanDrafRow();
+  var f = mode === 'temuan' ? drafTemuan(wo.ID, idTemuan) : null;
+  if (!f) {
+    f = drafRowBaru(wo.ID, mode, idTemuan);
+    if (idTemuan) { var t = cariTemuan(idTemuan); if (t && t.KOORDINAT) f.koordinat = t.KOORDINAT; }
   }
+  S.drafRow = f; simpanDrafRow();
   S.formRow = true; S.pesan = null; gambar(); window.scrollTo(0, 0);
 }
 
@@ -1270,7 +1302,20 @@ function pasangDetailWo(wo) {
   if ($('#w-lanjut')) $('#w-lanjut').onclick = function () { catatAbsen(wo, 'LANJUT'); };
   if ($('#w-selesai')) $('#w-selesai').onclick = function () { S.absenForm = { jenis: 'SELESAI', gawang: '' }; gambar(); };
   if ($('#w-luar')) $('#w-luar').onclick = function () { bukaFormRealisasi(wo, 'luar', ''); };
-  if ($('#w-draf')) $('#w-draf').onclick = function () { S.formRow = true; gambar(); window.scrollTo(0, 0); };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-draf]'), function (b) {
+    b.onclick = function () {
+      var df = S.drafRows.filter(function (x) { return x.kunci === b.getAttribute('data-draf'); })[0];
+      if (!df) return;
+      S.drafRow = df; S.formRow = true; S.pesan = null; gambar(); window.scrollTo(0, 0);
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-draf-hapus]'), function (b) {
+    b.onclick = function () {
+      var df = S.drafRows.filter(function (x) { return x.kunci === b.getAttribute('data-draf-hapus'); })[0];
+      if (!df || !confirm('Hapus draf realisasi ini beserta fotonya?')) return;
+      buangDrafRow(df); gambar();
+    };
+  });
   Array.prototype.forEach.call(document.querySelectorAll('[data-real-temuan]'), function (b) {
     b.onclick = function () { bukaFormRealisasi(wo, 'temuan', b.getAttribute('data-real-temuan')); };
   });
@@ -1344,7 +1389,7 @@ function gambarFormRealisasi(isi, wo) {
 
 function pasangFormRealisasi(wo) {
   var f = S.drafRow, ulang = function () { ambilIsianRow(); simpanDrafRow(); gambar(); };
-  $('#r-kembali').onclick = function () { ambilIsianRow(); simpanDrafRow(); S.formRow = false; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  $('#r-kembali').onclick = function () { ambilIsianRow(); tutupFormRow(); S.pesan = null; gambar(); window.scrollTo(0, 0); };
   $('#f-row').addEventListener('change', function () { ambilIsianRow(); simpanDrafRow(); });
   Array.prototype.forEach.call(document.querySelectorAll('input[name="r-jenis"]'), function (el) { el.onchange = ulang; });
   var lokasiTeks = wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'];
@@ -1375,10 +1420,11 @@ function pasangFormRealisasi(wo) {
         fotoSebelum: { mime: f.fotoSebelum.mime, data: f.fotoSebelum.data }, fotoSesudah: { mime: f.fotoSesudah.mime, data: f.fotoSesudah.data },
         fotoPengukuran: ukur ? { mime: f.fotoPengukuran.mime, data: f.fotoPengukuran.data } : null } };
     try { await DB.simpan(item); } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }
-    S.drafRow = drafRowBaru(); simpanDrafRow(); S.formRow = false;
+    buangDrafRow(f); S.formRow = false;
+    var sisa = drafWo(wo.ID).filter(drafBerisi).length;
     await muatAntrean();
     S.pesan = { jenis: 'ok', teks: (navigator.onLine ? 'Realisasi tersimpan dan sedang dikirim.' : 'Realisasi tersimpan di HP. Dikirim otomatis saat ada sinyal.') +
-      (idTemuan.length ? ' Temuan ' + idTemuan.join(', ') + ' ikut ditutup.' : '') };
+      (idTemuan.length ? ' Temuan ' + idTemuan.join(', ') + ' ikut ditutup.' : '') + (sisa ? ' Masih ada ' + sisa + ' draf realisasi lain di WO ini.' : '') };
     gambar(); window.scrollTo(0, 0);
     kirimAntrean();
   };
@@ -1781,8 +1827,15 @@ async function mulai() {
   S.dataRow = bacaLokal(KUNCI.dataRow);
   try { S.draf = (await DB.ambil('draf')) || null; } catch (e) { S.draf = null; }
   if (!S.draf) S.draf = drafBaru();
-  try { S.drafRow = (await DB.ambil('drafRow')) || null; } catch (e) { S.drafRow = null; }
-  if (!S.drafRow || S.drafRow.mode === undefined) S.drafRow = drafRowBaru(); // draf format lama (sebelum alur WO) dibuang
+  try { S.drafRows = (await DB.ambil('drafRows')) || []; } catch (e) { S.drafRows = []; }
+  if (!Array.isArray(S.drafRows)) S.drafRows = [];
+  // Draf tunggal versi lama ('drafRow') dipindah ke daftar draf.
+  try {
+    var lama = await DB.ambil('drafRow');
+    if (lama && lama.mode !== undefined && lama.idRencana && drafBerisi(lama)) { lama.kunci = lama.kunci || 'D' + Date.now().toString(36) + hex(2); S.drafRows.push(lama); DB.taruh('drafRows', S.drafRows).catch(function () {}); }
+    if (lama) DB.taruh('drafRow', null).catch(function () {});
+  } catch (e) { /* abaikan */ }
+  S.drafRow = drafRowBaru();
   S.wo = bacaLokal(KUNCI.wo);
   await muatAntrean();
   gambar();
