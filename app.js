@@ -6,12 +6,16 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-17.1';
+var VERSI_PWA = '2026-10-18.1';
 var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
 var DI_APK = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-var KUNCI = { api: 'motaha-api', sesi: 'motaha-sesi', data: 'motaha-data', tema: 'motaha-tema', dataRow: 'motaha-data-row', wo: 'motaha-wo' };
+var KUNCI = { api: 'motaha-api', sesi: 'motaha-sesi', data: 'motaha-data', tema: 'motaha-tema', dataRow: 'motaha-data-row', wo: 'motaha-wo',
+  user: 'motaha-user-terakhir', simpanSandi: 'motaha-simpan-sandi' };
+var IKON_MATA = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+/** Pengelola password HP (Google Password Manager di Chrome Android) — dipakai bila tersedia. */
+function bisaSimpanSandi() { return !!(window.PasswordCredential && navigator.credentials && navigator.credentials.store); }
 
 var S = {
   api: '', sesi: null, data: null, antrean: [], tab: 'input', draf: null, detail: null, eks: null,
@@ -432,12 +436,17 @@ function htmlLogo() {
 
 function htmlMasuk() {
   var habis = S.sesi && S.sesi.habis;
+  var userAwal = habis && S.sesi.pengguna ? S.sesi.pengguna.username : (bacaLokal(KUNCI.user) || '');
+  var simpan = bacaLokal(KUNCI.simpanSandi) !== false;
   return '<div class="masuk">' + htmlLogo() + '<div class="panel"><h1>Masuk</h1>' +
-    '<p class="sub">Pakai akun MOTAHA yang sama dengan dashboard. Setelah masuk, aplikasi tetap bisa dipakai tanpa sinyal selama 30 hari.</p>' +
+    '<p class="sub">Pakai akun MOTAHA yang sama dengan dashboard. Setelah masuk, Anda tetap masuk selama aplikasi rutin dipakai (tanpa sinyal pun bisa hingga 30 hari).</p>' +
     (habis ? '<div class="pesan pesan-info">Masa masuk di HP ini sudah habis. Masuk lagi untuk melanjutkan' + (S.antrean.length ? ' — <b>' + S.antrean.length + ' data</b> di HP akan dikirim setelah masuk.' : '.') + '</div>' : '') +
     htmlPesan() +
-    '<form id="f-masuk"><div class="medan"><label for="u">Username</label><input id="u" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" value="' + esc(habis && S.sesi.pengguna ? S.sesi.pengguna.username : '') + '" required></div>' +
-    '<div class="medan"><label for="p">Password</label><input id="p" type="password" autocomplete="current-password" required></div>' +
+    '<form id="f-masuk"><div class="medan"><label for="u">Username</label><input id="u" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" value="' + esc(userAwal) + '" required></div>' +
+    '<div class="medan"><label for="p">Password</label><div class="isian-sandi"><input id="p" name="password" type="password" autocomplete="current-password" required>' +
+    '<button type="button" class="lihat-sandi" id="lihat-sandi" aria-label="Tampilkan password" aria-pressed="false">' + IKON_MATA + '</button></div></div>' +
+    '<label class="simpan-sandi"><input type="checkbox" id="simpan-sandi"' + (simpan ? ' checked' : '') + '><span>Simpan password di HP ini' +
+    '<small>' + (bisaSimpanSandi() ? 'Disimpan di pengelola password HP (Google Password Manager) dan terisi otomatis saat masuk lagi.' : 'Browser ini akan menawarkan menyimpan password bila didukung.') + '</small></span></label>' +
     '<button class="tombol-utama" type="submit" id="t-masuk">Masuk</button></form></div>' +
     (navigator.onLine ? '' : '<p class="catatan">Sedang offline — masuk butuh sinyal.</p>') +
     '<p class="catatan" style="margin-top:14px">Versi ' + VERSI_PWA + ' · <a href="#" id="ganti-api">Ganti alamat server</a></p></div>';
@@ -449,16 +458,34 @@ function pasangMasuk() {
     if (S.antrean.length && !confirm('Masih ada data belum terkirim. Tetap ganti alamat server?')) return;
     S.api = ''; tulisLokal(KUNCI.api, null); gambar();
   };
+  $('#lihat-sandi').onclick = function () {
+    var p = $('#p'), lihat = p.type === 'password';
+    p.type = lihat ? 'text' : 'password'; this.setAttribute('aria-pressed', lihat ? 'true' : 'false');
+    this.setAttribute('aria-label', lihat ? 'Sembunyikan password' : 'Tampilkan password'); p.focus();
+  };
+  // Isi otomatis dari pengelola password HP (password yang pernah disimpan lewat aplikasi ini).
+  if (bisaSimpanSandi() && $('#simpan-sandi').checked && !$('#p').value && navigator.credentials.get) {
+    navigator.credentials.get({ password: true, mediation: 'optional' }).then(function (c) {
+      if (!c || !c.password || !$('#p') || $('#p').value) return;
+      $('#u').value = c.id; $('#p').value = c.password; $('#t-masuk').focus();
+    }).catch(function () { /* dibatalkan / tidak didukung */ });
+  }
+  if ($('#u').value) $('#p').focus();
   $('#f-masuk').onsubmit = async function (e) {
     e.preventDefault();
     var tombol = $('#t-masuk'); tombol.disabled = true; tombol.innerHTML = '<span class="putar"></span> Masuk…';
+    var user = $('#u').value.trim(), sandi = $('#p').value, simpan = $('#simpan-sandi').checked;
     try {
-      var j = await panggil('login', { username: $('#u').value.trim(), password: $('#p').value, perangkat: true });
+      var j = await panggil('login', { username: user, password: sandi, perangkat: true });
       if (!j.ok) throw galat(j.error || 'Gagal masuk.');
       if (j.pengguna && j.pengguna.wajibGanti) throw galat('Akun ini wajib mengganti password dulu. Buka dashboard MOTAHA, ganti password, lalu masuk lagi di sini.');
       if (!j.kunciPerangkat) throw galat('Script MOTAHA di server belum diperbarui ke versi ' + VERSI_SERVER_MIN + '. Hubungi admin.');
       S.sesi = { token: j.token, kunci: j.kunciPerangkat, pengguna: j.pengguna };
       tulisLokal(KUNCI.sesi, S.sesi); S.pesan = null;
+      tulisLokal(KUNCI.user, user.toLowerCase()); tulisLokal(KUNCI.simpanSandi, simpan);
+      if (simpan && bisaSimpanSandi()) {
+        try { navigator.credentials.store(new PasswordCredential({ id: user, password: sandi, name: (j.pengguna && j.pengguna.nama) || user })).catch(function () {}); } catch (e2) { /* abaikan */ }
+      }
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
       gambar(); muatData(true); kirimAntrean();
     } catch (err) {
