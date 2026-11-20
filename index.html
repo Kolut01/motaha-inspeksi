@@ -84,7 +84,7 @@
   .medan { display: grid; gap: 6px; margin-bottom: 16px; }
   .medan > label, .label { font-size: 13px; font-weight: 650; color: var(--text-2); }
   .wajib { color: var(--danger); }
-  input[type=text], input[type=password], input[type=date], input[type=url], input:not([type]), select, textarea {
+  input[type=text], input[type=number], input[type=datetime-local], input[type=password], input[type=date], input[type=url], input:not([type]), select, textarea {
     width: 100%; min-height: 48px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 10px 12px; background: var(--surface); font-size: 16px; }
   textarea { min-height: 88px; resize: vertical; }
   select:disabled { opacity: .55; }
@@ -153,6 +153,23 @@
   .absen-tombol { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .absen-tombol .tombol-utama { margin: 0; }
   .judul-bagian { font-size: 16px; margin: 18px 0 8px; }
+  .g-h { font-size: 15px; margin: 18px 0 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .g-fs { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px 2px; margin: 0 0 14px; }
+  .g-fs legend { font-weight: 700; font-size: 14px; padding: 0 6px; }
+  .g-dua { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .g-nh { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .g-nh label { display: grid; gap: 4px; font-size: 13px; } .g-nh select { min-width: 0; }
+  .g-ukur { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .g-sel { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 12px; padding: 8px; background: var(--surface-2); }
+  .g-sel > label { font-weight: 700; font-size: 14px; }
+  .g-sel, .g-foto, .g-dua > *, .g-ukur > * { min-width: 0; } .g-sel input, .g-dua input, .g-dua select { width: 100%; min-width: 0; box-sizing: border-box; }
+  .g-foto { position: relative; display: grid; place-items: center; gap: 2px; min-height: 92px; border: 1.5px dashed var(--line-strong); border-radius: 12px; background: var(--surface); overflow: hidden; text-align: center; color: var(--text-2); }
+  .g-foto input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .g-foto svg { width: 26px; height: 26px; color: var(--accent); } .g-foto small { font-size: 11.5px; padding: 0 4px; }
+  .g-foto img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .g-foto.ada { border-style: solid; border-color: var(--sudah); }
+  .g-foto.ada small { position: absolute; left: 4px; bottom: 4px; background: rgba(6,118,71,.92); color: #fff; border-radius: 6px; padding: 1px 6px; }
+  .g-ringkas { background: var(--accent-soft); border-radius: 12px; padding: 10px 12px; font-size: 13.5px; margin-bottom: 14px; } .g-ringkas:empty { display: none; }
   .kartu-rencana { cursor: pointer; border-left: 4px solid var(--accent); }
   .kartu-rencana.terpilih { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
   details.lainnya { margin-bottom: 8px; }

@@ -6,7 +6,7 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-18.1';
+var VERSI_PWA = '2026-10-18.2';
 var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
@@ -22,7 +22,7 @@ var S = {
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
   cari: '', saringPy: '', terakhirKirim: null, pembaruan: null, tlMode: 'belum', foto: {},
   dataRow: null, drafRow: null, drafRows: [], pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: '',
-  woIns: null, insForm: false, woForm: null
+  woIns: null, insForm: false, woForm: null, woGardu: null, drafGardu: {}
 };
 
 /* ---------- Util ---------- */
@@ -166,10 +166,12 @@ async function kirimAntrean() {
     for (var i = 0; i < tunggu.length; i++) {
       var item = tunggu[i];
       try {
-        await api(item.aksi, Object.assign({}, item.muatan, { ringkas: true }));
+        if (item.aksi === 'inspeksiGardu') await kirimInspeksiGardu(item);
+        else await api(item.aksi, Object.assign({}, item.muatan, { ringkas: true }));
         await DB.hapus(item.idAntre); terkirim++;
       } catch (e) {
         if (e.kode === 'SUDAH_EKSEKUSI') { await DB.hapus(item.idAntre); terkirim++; continue; }
+        if (item.aksi === 'inspeksiGardu' && /sudah diisi/i.test(e.message || '')) { await DB.hapus(item.idAntre); terkirim++; continue; }
         if (e.kode === 'JARINGAN' || e.kode === 'SERVER' || e.kode === 'MASUK' || e.kode === 'VERSI') {
           item.pesan = e.message; item.percobaan = (item.percobaan || 0) + 1; await DB.simpan(item);
           if (e.kode !== 'JARINGAN') S.pesan = { jenis: 'galat', teks: e.message };
@@ -353,7 +355,7 @@ function gambar() {
   Array.prototype.forEach.call(document.querySelectorAll('[data-tab]'), function (b) {
     b.onclick = function () {
       simpanDrafSekarang(); var ke = b.getAttribute('data-tab');
-      if (ke === 'input' && S.tab === 'input' && !S.gantiAntre) { S.insForm = false; S.woIns = null; S.woForm = null; } // ketuk lagi = kembali ke daftar WO
+      if (ke === 'input' && S.tab === 'input' && !S.gantiAntre) { S.insForm = false; S.woIns = null; S.woForm = null; S.woGardu = null; } // ketuk lagi = kembali ke daftar WO
       S.tab = ke; S.detail = null; S.detailReal = null; S.pesan = null; gambar(); window.scrollTo(0, 0);
     };
   });
@@ -364,7 +366,7 @@ function gambar() {
       'Belum ada data form di HP ini. Sambungkan ke internet sekali untuk mengambil daftar penyulang, setelah itu form bisa dipakai tanpa sinyal.') + '</p></div>';
     return;
   }
-  if (S.tab === 'input') { if (S.insForm || S.gantiAntre) gambarInput(isi); else gambarInspeksiWo(isi); }
+  if (S.tab === 'input') { if (S.woGardu && !S.gantiAntre) gambarFormGardu(isi); else if (S.insForm || S.gantiAntre) gambarInput(isi); else gambarInspeksiWo(isi); }
   else if (S.tab === 'tl') gambarTindakLanjut(isi);
   else if (S.tab === 'row') gambarRowHp(isi);
   else if (S.tab === 'real') gambarRealisasiHp(isi);
@@ -729,7 +731,11 @@ function gambarInspeksiWo(isi) {
     (tertunda.length ? '<h2 class="judul-bagian">Belum selesai dari hari sebelumnya (' + tertunda.length + ')</h2>' + daftar(tertunda) : '') +
     (selesaiLalu.length ? '<details class="lainnya"><summary>Selesai 7 hari terakhir (' + selesaiLalu.length + ')</summary>' + daftar(selesaiLalu) + '</details>' : '') +
     (depan.length ? '<details class="lainnya"><summary>Jadwal mendatang (' + depan.length + ')</summary>' + daftar(depan) + '</details>' : '') +
+    htmlDaftarWoGardu() +
     '<button class="tombol tombol-lebar" type="button" id="w-luar-wo" style="margin-top:14px">+ Input temuan di luar WO</button>';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-wo-gardu]'), function (b) {
+    b.onclick = function () { S.woGardu = b.getAttribute('data-wo-gardu'); S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  });
   Array.prototype.forEach.call(document.querySelectorAll('[data-wo-ins]'), function (b) {
     b.onclick = function () { S.woIns = b.getAttribute('data-wo-ins'); S.woForm = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
   });
@@ -839,6 +845,198 @@ function pasangDetailWoIns(wo, s) {
 }
 
 /* ---------- Tindak lanjut ---------- */
+/* ---------- WO Inspeksi & Pengukuran Gardu ----------
+ * WO dibuat admin di dashboard (Distribusi › Inspeksi Gardu Distribusi). Petugas mengisi kondisi gardu, trafo, PHBTR,
+ * kabel & skun per jurusan, arus tiap fasa per jurusan dan tegangan pangkal — semua dengan foto.
+ * Disimpan di HP dulu (draf + antrean). Saat dikirim, foto diunggah satu per satu (unggahFotoGardu) lalu hasil (simpanHasilInspeksiGardu).
+ */
+function infoGardu() { return (S.data && S.data.woGardu) || { wo: [] }; }
+function daftarWoGardu() { return infoGardu().wo || []; }
+function cariWoGardu(id) { return daftarWoGardu().filter(function (w) { return w.id === id; })[0] || null; }
+function antreGardu(id) { return S.antrean.filter(function (x) { return x.aksi === 'inspeksiGardu' && x.muatan && x.muatan.id === id; })[0] || null; }
+function simpanDrafGardu() { DB.taruh('drafGardu', S.drafGardu).catch(function () {}); }
+function fasaArusGardu(w) { return w.satuFasa ? ['R', 'N'] : ['R', 'S', 'T', 'N']; }
+function fasaNhGardu(w) { return w.satuFasa ? ['R'] : ['R', 'S', 'T']; }
+function ukurVGardu(w) { return w.satuFasa ? ['RN'] : ['RN', 'SN', 'TN', 'RS', 'ST', 'RT']; }
+function labelV(k) { return k.charAt(0) + '-' + k.charAt(1); }
+
+function htmlDaftarWoGardu() {
+  var daftar = daftarWoGardu().slice().sort(function (a, b) { return a.tanggal < b.tanggal ? -1 : a.tanggal > b.tanggal ? 1 : 0; });
+  if (!daftar.length) return '';
+  var t = hariIni();
+  return '<h2 class="judul-bagian">WO inspeksi & pengukuran gardu (' + daftar.length + ')</h2>' + daftar.map(function (w) {
+    var q = antreGardu(w.id), draf = S.drafGardu[w.id];
+    var st = q ? (q.status === 'ditolak' ? ['Ditolak server', 'tag-tolak', 'belum'] : ['Menunggu kirim', 'tag-tunggu', 'berjalan']) :
+      w.tanggal < t ? ['Terlewat', 'tag-tolak', 'terlewat'] : w.tanggal === t ? ['Hari ini', 'tag-belum', 'belum'] : ['Terjadwal', '', 'nanti'];
+    return '<button type="button" class="kartu kartu-wo st-' + st[2] + '" data-wo-gardu="' + esc(w.id) + '">' +
+      '<div class="kartu-judul">' + esc((w.kode || w.gardu) + ' · ' + w.penyulang) + '</div>' +
+      '<div class="kartu-ket">' + esc([w.alamat, w.kva ? w.kva + ' kVA ' + w.fasa : ''].filter(Boolean).join(' · ')) + '</div>' +
+      '<div class="tags"><span class="tag ' + st[1] + '">' + st[0] + '</span>' + (w.tanggal !== t ? '<span class="tag">' + esc(tglTampil(w.tanggal)) + '</span>' : '') +
+      (draf && !q ? '<span class="tag tag-jalan">Draf tersimpan</span>' : '') + '</div></button>';
+  }).join('');
+}
+
+function drafGarduBaru() { return { waktu: '', bersih: '', kunci: '', trafo: '', phbtr: '', jml: 1, jur: {}, v: {}, foto: {}, catatan: '' }; }
+
+/** Baca semua isian form ke draf (foto disimpan saat diambil). */
+function ambilIsianGardu(w, f) {
+  var nilai = function (id) { var el = document.getElementById(id); return el ? el.value : undefined; };
+  var radioV = function (nm) { var r = document.querySelector('input[name="' + nm + '"]:checked'); return r ? r.value : ''; };
+  if (!document.getElementById('g-waktu')) return;
+  f.waktu = nilai('g-waktu'); f.bersih = radioV('g-bersih'); f.kunci = radioV('g-kunci'); f.trafo = radioV('g-trafo'); f.phbtr = radioV('g-phbtr');
+  f.jml = +(radioV('g-jml') || f.jml || 1); f.catatan = nilai('g-cat') || '';
+  for (var j = 1; j <= 5; j++) {
+    if (!document.getElementById('g-j' + j + '-jk')) continue;
+    var o = f.jur[j] = f.jur[j] || { nh: {}, arus: {} };
+    fasaNhGardu(w).forEach(function (fs) { o.nh[fs] = nilai('g-j' + j + '-nh' + fs); });
+    o.jk = nilai('g-j' + j + '-jk'); o.uk = nilai('g-j' + j + '-uk'); o.skun = radioV('g-j' + j + '-skun');
+    fasaArusGardu(w).forEach(function (fs) { o.arus[fs] = nilai('g-j' + j + '-i' + fs); });
+  }
+  ukurVGardu(w).forEach(function (k) { f.v[k] = nilai('g-v' + k); });
+}
+
+function gambarFormGardu(isi) {
+  var w = cariWoGardu(S.woGardu), q = w && antreGardu(w.id);
+  if (!w) { S.woGardu = null; gambarInspeksiWo(isi); return; }
+  var F = infoGardu().form || {}, at = infoGardu().aturan || { vMin: 198, vMax: 231, vNominal: 220 };
+  var f = S.drafGardu[w.id] = S.drafGardu[w.id] || drafGarduBaru();
+  if (!f.waktu) { var d = new Date(); f.waktu = hariIni() + 'T' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+  var opsi = function (daftar, pilih) { return '<option value="">—</option>' + (daftar || []).map(function (v) { return '<option' + (v === pilih ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join(''); };
+  var ubin = function (k, label) {
+    var ada = f.foto[k];
+    return '<label class="g-foto' + (ada ? ' ada' : '') + '" for="gf-' + k + '"><input id="gf-' + k + '" data-gfoto="' + k + '" data-label="' + esc(label) + '" type="file" accept="image/*" capture="environment">' +
+      (ada ? '<img src="' + ada.data + '" alt=""><small>✓ ' + esc(label) + '</small>' : IKON.kamera + '<small>' + esc(label) + '</small>') + '</label>';
+  };
+  var jurusan = function (n) {
+    var o = f.jur[n] || { nh: {}, arus: {} };
+    return '<fieldset class="g-fs" data-jur="' + n + '"' + (n > f.jml ? ' hidden' : '') + '><legend>Jurusan ' + n + '</legend>' +
+      '<div class="medan"><span class="label">NH fuse terpasang <span class="wajib">*</span></span><div class="g-nh">' + fasaNhGardu(w).map(function (fs) {
+        return '<label><b>' + fs + '</b><select id="g-j' + n + '-nh' + fs + '">' + opsi(F.nh, o.nh[fs]) + '</select></label>'; }).join('') + '</div></div>' +
+      '<div class="g-dua"><div class="medan"><label for="g-j' + n + '-jk">Jenis kabel <span class="wajib">*</span></label><select id="g-j' + n + '-jk">' + opsi(F.jenisKabel, o.jk) + '</select></div>' +
+      '<div class="medan"><label for="g-j' + n + '-uk">Ukuran kabel <span class="wajib">*</span></label><input id="g-j' + n + '-uk" list="g-ukuran" value="' + esc(o.uk || '') + '" placeholder="3x70+1x50 mm²"></div></div>' +
+      '<div class="medan"><span class="label">Kondisi kabel skun <span class="wajib">*</span></span>' + radio('g-j' + n + '-skun', F.skun || [], o.skun) + '</div>' +
+      '<div class="medan"><span class="label">Arus (A) & foto tiap fasa <span class="wajib">*</span></span><div class="g-ukur">' + fasaArusGardu(w).map(function (fs) {
+        return '<div class="g-sel"><label for="g-j' + n + '-i' + fs + '">' + fs + '</label><input id="g-j' + n + '-i' + fs + '" type="number" min="0" step="any" inputmode="decimal" value="' + esc(o.arus[fs] || '') + '" placeholder="A">' +
+          ubin('j' + n + fs, 'J' + n + ' arus ' + fs) + '</div>'; }).join('') + '</div></div></fieldset>';
+  };
+  isi.innerHTML = '<button class="tombol-kembali" type="button" id="g-kembali">‹ Daftar WO inspeksi</button>' +
+    '<h1>Inspeksi gardu ' + esc(w.kode || '') + '</h1><p class="sub">' + esc(w.id + ' · ' + w.penyulang + (w.kva ? ' · ' + w.kva + ' kVA ' + w.fasa : '')) + '</p>' + htmlPesan() +
+    (q ? '<div class="pesan pesan-' + (q.status === 'ditolak' ? 'galat' : 'info') + '">' + (q.status === 'ditolak' ? 'Hasil ini ditolak server: ' + esc(q.pesan) + ' Perbaiki lalu simpan lagi.' : 'Hasil WO ini sudah tersimpan di HP dan menunggu dikirim. Menyimpan lagi akan mengganti data di antrean.') + '</div>' : '') +
+    '<form id="f-gardu" class="panel" novalidate>' +
+    '<div class="wo-kunci"><small>WO ' + esc(w.id) + ' · rencana ' + esc(tglTampil(w.tanggal)) + '</small><dl class="rinci"><dt>Gardu</dt><dd>' + esc((w.kode || '') + ' · ' + w.gardu) + '</dd>' +
+    '<dt>Alamat</dt><dd>' + esc(w.alamat || '—') + '</dd><dt>Petugas</dt><dd>' + esc(w.petugas) + '</dd></dl>' +
+    (w.lat && w.lng ? '<a class="catatan" href="https://www.google.com/maps/dir/?api=1&destination=' + w.lat + ',' + w.lng + '" target="_blank" rel="noopener">Petunjuk arah ke gardu ›</a>' : '') + '</div>' +
+    '<div class="medan"><label for="g-waktu">Waktu inspeksi <span class="wajib">*</span></label><input id="g-waktu" type="datetime-local" value="' + esc(f.waktu) + '"></div>' +
+    '<h2 class="g-h">Gardu dan trafo</h2>' +
+    '<div class="medan"><span class="label">Kebersihan gardu <span class="wajib">*</span></span>' + radio('g-bersih', F.kebersihan || [], f.bersih) + '</div>' +
+    '<div class="medan"><span class="label">Kunci gardu <span class="wajib">*</span></span>' + radio('g-kunci', F.kunci || [], f.kunci) + '</div>' +
+    '<div class="medan"><span class="label">Kondisi trafo <span class="wajib">*</span></span>' + radio('g-trafo', F.trafo || [], f.trafo) + '</div>' +
+    '<h2 class="g-h">PHBTR</h2>' +
+    '<div class="medan"><span class="label">Kondisi PHBTR <span class="wajib">*</span></span>' + radio('g-phbtr', F.phbtr || [], f.phbtr) + '</div>' +
+    '<div class="medan"><span class="label">Foto PHBTR <span class="wajib">*</span></span><div class="g-dua">' + ubin('luar', 'PHBTR tampak luar') + ubin('dalam', 'PHBTR tampak dalam') + '</div></div>' +
+    '<div class="medan"><span class="label">Jumlah jurusan <span class="wajib">*</span></span>' + radio('g-jml', ['1', '2', '3', '4', '5'].slice(0, F.maksJurusan || 5), String(f.jml)) + '</div>' +
+    '<datalist id="g-ukuran">' + (F.ukuranKabel || []).map(function (u) { return '<option value="' + esc(u) + '">'; }).join('') + '</datalist>' +
+    [1, 2, 3, 4, 5].slice(0, F.maksJurusan || 5).map(jurusan).join('') +
+    '<h2 class="g-h">Tegangan pangkal</h2><div class="medan"><span class="label">Tegangan (V) & foto tiap pengukuran <span class="wajib">*</span></span><div class="g-ukur">' + ukurVGardu(w).map(function (k) {
+      return '<div class="g-sel"><label for="g-v' + k + '">' + labelV(k) + '</label><input id="g-v' + k + '" type="number" min="0" step="any" inputmode="decimal" value="' + esc(f.v[k] || '') + '" placeholder="' + (k.charAt(1) === 'N' ? at.vNominal : 380) + ' V">' +
+        ubin('v' + k, 'Tegangan ' + labelV(k)) + '</div>'; }).join('') + '</div>' +
+    '<p class="catatan">' + (w.satuFasa ? 'Trafo 1 fasa: cukup R-N.' : 'Fasa-netral normal ' + at.vMin + '–' + at.vMax + ' V; fasa-fasa ±380 V.') + '</p></div>' +
+    '<div class="g-ringkas" id="g-ringkas"></div>' +
+    '<div class="medan"><label for="g-cat">Catatan</label><textarea id="g-cat" rows="2" placeholder="opsional">' + esc(f.catatan) + '</textarea></div>' +
+    '<button class="tombol-utama" type="submit">Simpan hasil inspeksi</button>' +
+    '<p class="catatan" style="margin-top:8px">Isian & foto tersimpan otomatis di HP sebagai draf. Data dikirim saat ada sinyal (' + (ukurVGardu(w).length + 2 + fasaArusGardu(w).length) + '+ foto).</p></form>';
+  pasangFormGardu(w, f);
+}
+
+function ringkasGardu(w, f) {
+  var tot = { R: 0, S: 0, T: 0, N: 0 }, ada = false;
+  for (var j = 1; j <= f.jml; j++) { var o = f.jur[j]; if (!o) continue; fasaArusGardu(w).forEach(function (fs) { var v = o.arus[fs]; if (v !== '' && v !== undefined) { tot[fs] += +v; ada = true; } }); }
+  var kva = 0, vv = [];
+  ['R', 'S', 'T'].forEach(function (fs) { if (w.satuFasa && fs !== 'R') return; var v = f.v[fs + 'N']; if (v) { vv.push(+v); kva += tot[fs] * v / 1000; } });
+  var el = document.getElementById('g-ringkas'); if (!el) return;
+  el.innerHTML = ada ? '<b>Total arus</b> ' + fasaArusGardu(w).map(function (fs) { return fs + ' ' + angkaId(tot[fs], 1); }).join(' · ') + ' A' +
+    (vv.length ? '<br><b>Beban</b> ' + angkaId(kva, 1) + ' kVA' + (w.kva ? ' (' + angkaId(kva / w.kva * 100, 1) + '%)' : '') : '') : '';
+}
+
+function pasangFormGardu(w, f) {
+  var simpanNanti = (function () { var t; return function () { clearTimeout(t); t = setTimeout(function () { ambilIsianGardu(w, f); simpanDrafGardu(); ringkasGardu(w, f); }, 300); }; })();
+  var form = document.getElementById('f-gardu');
+  form.addEventListener('input', simpanNanti); form.addEventListener('change', simpanNanti);
+  ringkasGardu(w, f);
+  $('#g-kembali').onclick = function () { ambilIsianGardu(w, f); simpanDrafGardu(); S.woGardu = null; S.pesan = null; gambar(); window.scrollTo(0, 0); };
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="g-jml"]'), function (r) {
+    r.addEventListener('change', function () {
+      f.jml = +r.value;
+      Array.prototype.forEach.call(document.querySelectorAll('[data-jur]'), function (fs) { fs.hidden = +fs.getAttribute('data-jur') > f.jml; });
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('input[data-gfoto]'), function (inp) {
+    inp.onchange = function () {
+      var berkas = inp.files && inp.files[0]; if (!berkas) return;
+      var k = inp.getAttribute('data-gfoto'), label = inp.getAttribute('data-label');
+      toast('Memproses foto…');
+      siapkanFoto(berkas, (w.kode || '') + ' · ' + label, 'WO ' + w.id).then(function (h) {
+        f.foto[k] = { mime: h.mime, data: h.data, kb: h.kb, koordinat: h.koordinat };
+        simpanDrafGardu();
+        var lbl = inp.parentNode; lbl.classList.add('ada');
+        Array.prototype.forEach.call(lbl.querySelectorAll('img,small,svg'), function (x) { x.remove(); });
+        lbl.insertAdjacentHTML('beforeend', '<img src="' + h.data + '" alt=""><small>✓ ' + esc(label) + '</small>');
+      }).catch(function (e) { toast(e.message); }).then(function () { inp.value = ''; });
+    };
+  });
+  form.onsubmit = async function (e) {
+    e.preventDefault();
+    ambilIsianGardu(w, f);
+    var salah = '', cek = function (k, t) { if (!salah && k) salah = t; };
+    cek(!f.waktu, 'Waktu inspeksi wajib diisi.'); cek(f.waktu && f.waktu.slice(0, 10) > hariIni(), 'Waktu inspeksi tidak boleh di masa depan.');
+    cek(!f.bersih, 'Pilih kebersihan gardu.'); cek(!f.kunci, 'Pilih kunci gardu.'); cek(!f.trafo, 'Pilih kondisi trafo.'); cek(!f.phbtr, 'Pilih kondisi PHBTR.');
+    cek(!f.foto.luar || !f.foto.dalam, 'Ambil foto PHBTR tampak luar & tampak dalam.');
+    for (var j = 1; j <= f.jml; j++) {
+      var o = f.jur[j] || { nh: {}, arus: {} };
+      fasaNhGardu(w).forEach(function (fs) { cek(!o.nh[fs], 'Jurusan ' + j + ': pilih NH fuse fasa ' + fs + '.'); });
+      cek(!o.jk, 'Jurusan ' + j + ': pilih jenis kabel.'); cek(!String(o.uk || '').trim(), 'Jurusan ' + j + ': isi ukuran kabel.'); cek(!o.skun, 'Jurusan ' + j + ': pilih kondisi kabel skun.');
+      fasaArusGardu(w).forEach(function (fs) { cek(o.arus[fs] === '' || o.arus[fs] === undefined || +o.arus[fs] < 0, 'Jurusan ' + j + ': isi arus fasa ' + fs + '.'); cek(!f.foto['j' + j + fs], 'Jurusan ' + j + ': ambil foto arus fasa ' + fs + '.'); });
+    }
+    ukurVGardu(w).forEach(function (k) { cek(!f.v[k] || +f.v[k] <= 0, 'Isi tegangan pangkal ' + labelV(k) + '.'); cek(!f.foto['v' + k], 'Ambil foto tegangan ' + labelV(k) + '.'); });
+    if (salah) { S.pesan = { jenis: 'galat', teks: salah }; gambar(); window.scrollTo(0, 0); return; }
+    var item = { idAntre: 'GDI-' + w.id, aksi: 'inspeksiGardu', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
+      ringkasan: { judul: 'Inspeksi gardu ' + (w.kode || w.gardu) + ' · ' + w.penyulang, sub: f.jml + ' jurusan · trafo ' + f.trafo + ' · PHBTR ' + f.phbtr, tanggal: f.waktu.slice(0, 10) },
+      muatan: { id: w.id }, draf: JSON.parse(JSON.stringify(f)), idFoto: {} };
+    try { await DB.simpan(item); } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }
+    delete S.drafGardu[w.id]; simpanDrafGardu();
+    S.woGardu = null; await muatAntrean();
+    S.pesan = { jenis: 'ok', teks: navigator.onLine ? 'Hasil inspeksi gardu tersimpan dan sedang dikirim (foto diunggah satu per satu).' : 'Hasil inspeksi gardu tersimpan di HP. Akan dikirim otomatis saat ada sinyal.' };
+    gambar(); window.scrollTo(0, 0);
+    kirimAntrean();
+  };
+}
+
+/** Kirim satu hasil inspeksi gardu dari antrean: unggah foto yang belum terunggah (ID disimpan agar bisa dilanjutkan), lalu simpan hasil. */
+async function kirimInspeksiGardu(item) {
+  var f = item.draf, w = { satuFasa: false }, idF = item.idFoto = item.idFoto || {};
+  var wo = cariWoGardu(item.muatan.id); if (wo) w = wo;
+  var kunci = Object.keys(f.foto).filter(function (k) {
+    if (k === 'luar' || k === 'dalam' || k.charAt(0) === 'v') return true;
+    var m = /^j(\d)/.exec(k); return m && +m[1] <= f.jml;
+  });
+  for (var i = 0; i < kunci.length; i++) {
+    var k = kunci[i]; if (idF[k]) continue;
+    var r = await api('unggahFotoGardu', { foto: { mime: f.foto[k].mime, data: f.foto[k].data }, nama: item.muatan.id + '_' + k });
+    idF[k] = r.id; await DB.simpan(item);
+  }
+  var jurusan = [];
+  for (var j = 1; j <= f.jml; j++) {
+    var o = f.jur[j] || { nh: {}, arus: {} }, foto = {};
+    Object.keys(o.arus).forEach(function (fs) { foto[fs] = idF['j' + j + fs] || ''; });
+    jurusan.push({ nh: o.nh, kabelJenis: o.jk, kabelUkuran: o.uk, skun: o.skun, arus: o.arus, foto: foto });
+  }
+  var fotoTegangan = {}; Object.keys(f.v).forEach(function (k) { fotoTegangan[k] = idF['v' + k] || ''; });
+  var koor = (f.foto.luar && f.foto.luar.koordinat) || '';
+  await api('simpanHasilInspeksiGardu', { id: item.muatan.id, waktu: String(f.waktu).replace('T', ' '), koordinat: koor,
+    kebersihan: f.bersih, kunci: f.kunci, kondisiTrafo: f.trafo, kondisiPhbtr: f.phbtr, fotoPhbtrLuar: idF.luar, fotoPhbtrDalam: idF.dalam,
+    jurusan: jurusan, tegangan: f.v, fotoTegangan: fotoTegangan, catatan: f.catatan });
+}
+
 function daftarTemuan() {
   // Temuan terbuka dari server + temuan baru di antrean yang belum terkirim (status Belum Eksekusi).
   var belumEks = S.data.pilihan.status[0];
@@ -1789,6 +1987,7 @@ function gambarAntrean(isi) {
         (x.pesan ? '<p class="catatan" style="margin-top:8px;color:' + (x.status === 'ditolak' ? 'var(--danger)' : 'var(--muted)') + '">' + esc(x.pesan) + '</p>' : '') +
         (x.status === 'ditolak' ? '<div style="display:flex;gap:8px;margin-top:10px">' +
           (x.aksi === 'simpanInspeksi' ? '<button class="tombol tombol-kecil" data-perbaiki="' + i + '">Perbaiki</button>' : '') +
+          (x.aksi === 'inspeksiGardu' ? '<button class="tombol tombol-kecil" data-perbaiki-gardu="' + i + '">Perbaiki</button>' : '') +
           '<button class="tombol tombol-kecil" data-ulang="' + i + '">Coba kirim lagi</button>' +
           '<button class="tombol tombol-kecil tombol-bahaya" data-hapus="' + i + '">Hapus</button></div>' : '') + '</div>';
     }).join('') : '<div class="kosong-daftar">Tidak ada data yang menunggu.</div>');
@@ -1801,6 +2000,10 @@ function gambarAntrean(isi) {
     await DB.hapus(x.idAntre); await muatAntrean(); gambar();
   });
   tiap('data-ulang', async function (x) { x.status = 'menunggu'; x.pesan = ''; await DB.simpan(x); await muatAntrean(); gambar(); kirimAntrean(); });
+  tiap('data-perbaiki-gardu', function (x) {
+    S.drafGardu[x.muatan.id] = x.draf; simpanDrafGardu();
+    S.woGardu = x.muatan.id; S.tab = 'input'; S.pesan = { jenis: 'galat', teks: 'Ditolak server: ' + x.pesan }; gambar(); window.scrollTo(0, 0);
+  });
   tiap('data-perbaiki', function (x) {
     var m = x.muatan;
     S.draf = Object.assign(drafBaru(), {
@@ -1862,6 +2065,7 @@ async function mulai() {
     if (lama && lama.mode !== undefined && lama.idRencana && drafBerisi(lama)) { lama.kunci = lama.kunci || 'D' + Date.now().toString(36) + hex(2); S.drafRows.push(lama); DB.taruh('drafRows', S.drafRows).catch(function () {}); }
     if (lama) DB.taruh('drafRow', null).catch(function () {});
   } catch (e) { /* abaikan */ }
+  try { S.drafGardu = (await DB.ambil('drafGardu')) || {}; } catch (e) { S.drafGardu = {}; }
   S.drafRow = drafRowBaru();
   S.wo = bacaLokal(KUNCI.wo);
   await muatAntrean();
