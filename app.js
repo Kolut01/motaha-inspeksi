@@ -6,7 +6,7 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-18.2';
+var VERSI_PWA = '2026-10-18.4';
 var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
@@ -22,7 +22,7 @@ var S = {
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
   cari: '', saringPy: '', terakhirKirim: null, pembaruan: null, tlMode: 'belum', foto: {},
   dataRow: null, drafRow: null, drafRows: [], pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: '',
-  woIns: null, insForm: false, woForm: null, woGardu: null, drafGardu: {}
+  woIns: null, insForm: false, woForm: null, woGardu: null, drafGardu: {}, drafGarduKirim: {}
 };
 
 /* ---------- Util ---------- */
@@ -141,6 +141,11 @@ async function muatData(diam) {
   try {
     var d = await api('dataInspeksiMobile');
     S.data = d; tulisLokal(KUNCI.data, d);
+    if (d.woGardu && d.woGardu.ok !== false) {   // simpan salinan kiriman hanya untuk WO yang masih WREVIEW / dikembalikan
+      var aktifG = {}; (d.woGardu.wo || []).forEach(function (w) { if (w.status === 'WREVIEW' || w.status === 'INPRG') aktifG[w.id] = 1; });
+      var ubah = false; Object.keys(S.drafGarduKirim).forEach(function (id) { if (!aktifG[id]) { delete S.drafGarduKirim[id]; ubah = true; } });
+      if (ubah) DB.taruh('drafGarduKirim', S.drafGarduKirim).catch(function () {});
+    }
     try {
       var r = await api('dataRowMobile');
       S.dataRow = r; S.pesanRow = ''; tulisLokal(KUNCI.dataRow, r);
@@ -166,7 +171,7 @@ async function kirimAntrean() {
     for (var i = 0; i < tunggu.length; i++) {
       var item = tunggu[i];
       try {
-        if (item.aksi === 'inspeksiGardu') await kirimInspeksiGardu(item);
+        if (item.aksi === 'inspeksiGardu') { await kirimInspeksiGardu(item); S.drafGarduKirim[item.muatan.id] = item.draf; DB.taruh('drafGarduKirim', S.drafGarduKirim).catch(function () {}); }
         else await api(item.aksi, Object.assign({}, item.muatan, { ringkas: true }));
         await DB.hapus(item.idAntre); terkirim++;
       } catch (e) {
@@ -733,6 +738,7 @@ function gambarInspeksiWo(isi) {
     (depan.length ? '<details class="lainnya"><summary>Jadwal mendatang (' + depan.length + ')</summary>' + daftar(depan) + '</details>' : '') +
     htmlDaftarWoGardu() +
     '<button class="tombol tombol-lebar" type="button" id="w-luar-wo" style="margin-top:14px">+ Input temuan di luar WO</button>';
+  if ($('#g-perbarui')) $('#g-perbarui').onclick = function () { if (!navigator.onLine) { toast('Sedang offline.'); return; } muatData(); };
   Array.prototype.forEach.call(document.querySelectorAll('[data-wo-gardu]'), function (b) {
     b.onclick = function () { S.woGardu = b.getAttribute('data-wo-gardu'); S.pesan = null; gambar(); window.scrollTo(0, 0); };
   });
@@ -861,19 +867,43 @@ function ukurVGardu(w) { return w.satuFasa ? ['RN'] : ['RN', 'SN', 'TN', 'RS', '
 function labelV(k) { return k.charAt(0) + '-' + k.charAt(1); }
 
 function htmlDaftarWoGardu() {
-  var daftar = daftarWoGardu().slice().sort(function (a, b) { return a.tanggal < b.tanggal ? -1 : a.tanggal > b.tanggal ? 1 : 0; });
-  if (!daftar.length) return '';
+  var g = S.data && S.data.woGardu;
+  var kepala = function (n) {
+    return '<div class="g-judul-baris"><h2 class="judul-bagian">WO inspeksi & pengukuran gardu' + (n ? ' (' + n + ')' : '') + '</h2>' +
+      '<button type="button" class="tombol tombol-kecil" id="g-perbarui"' + (S.memuatData || !navigator.onLine ? ' disabled' : '') + '>' + (S.memuatData ? 'Memuat…' : '⟳ Perbarui') + '</button></div>';
+  };
+  if (!g) return kepala(0) + '<div class="pesan pesan-galat">Script MOTAHA di server belum versi 2026-10-18.77 atau lebih baru, jadi WO gardu belum bisa tampil. Minta admin men-deploy versi terbaru (Deploy → Manage deployments → New version), lalu ketuk ⟳ Perbarui.</div>';
+  if (g.ok === false) return kepala(0) + '<div class="pesan pesan-galat">WO gardu tidak bisa dibaca dari server: ' + esc(g.error || 'galat tidak dikenal') + '</div>';
+  var daftar = (g.wo || []).slice().sort(function (a, b) { return a.tanggal < b.tanggal ? -1 : a.tanggal > b.tanggal ? 1 : 0; });
+  var info = 'Data diambil ' + esc(jamTampil(S.data.diambil)) + '.';
+  if (!daftar.length) {
+    var lain = (g.jumlahSemua || 0);
+    return kepala(0) + '<div class="kosong-daftar">Belum ada WO inspeksi gardu' + (g.yantek ? ' untuk <b>' + esc(g.yantek) + '</b>' : '') + ' (7 hari ke belakang s.d. 14 hari ke depan).</div>' +
+      (lain ? '<p class="catatan">Ada ' + lain + ' WO gardu untuk petugas lain. WO hanya tampil di akun petugas yantek yang dipilih saat WO dibuat.</p>' : '') +
+      '<p class="catatan">' + info + ' WO yang baru dibuat di dashboard muncul setelah ⟳ Perbarui.</p>';
+  }
   var t = hariIni();
-  return '<h2 class="judul-bagian">WO inspeksi & pengukuran gardu (' + daftar.length + ')</h2>' + daftar.map(function (w) {
-    var q = antreGardu(w.id), draf = S.drafGardu[w.id];
-    var st = q ? (q.status === 'ditolak' ? ['Ditolak server', 'tag-tolak', 'belum'] : ['Menunggu kirim', 'tag-tunggu', 'berjalan']) :
-      w.tanggal < t ? ['Terlewat', 'tag-tolak', 'terlewat'] : w.tanggal === t ? ['Hari ini', 'tag-belum', 'belum'] : ['Terjadwal', '', 'nanti'];
+  return kepala(daftar.length) + daftar.map(function (w) {
+    var q = antreGardu(w.id), draf = S.drafGardu[w.id], sg = statusGarduHp(w);
+    var st = sg === 'TOLAK' ? ['Ditolak server', 'tag-tolak', 'belum'] : sg === 'KIRIM' ? ['Hasil menunggu kirim', 'tag-tunggu', 'berjalan'] :
+      sg === 'WREVIEW' ? ['WREVIEW · menunggu review', 'tag-sudah', 'selesai'] :
+      sg === 'INPRG' ? [w.catatanReview ? 'INPRG · dikembalikan' : 'INPRG · sedang inspeksi', w.catatanReview ? 'tag-tolak' : 'tag-jalan', 'berjalan'] :
+      w.tanggal < t ? ['WINSP · terlewat', 'tag-tolak', 'terlewat'] : w.tanggal === t ? ['WINSP · hari ini', 'tag-belum', 'belum'] : ['WINSP · terjadwal', '', 'nanti'];
     return '<button type="button" class="kartu kartu-wo st-' + st[2] + '" data-wo-gardu="' + esc(w.id) + '">' +
       '<div class="kartu-judul">' + esc((w.kode || w.gardu) + ' · ' + w.penyulang) + '</div>' +
       '<div class="kartu-ket">' + esc([w.alamat, w.kva ? w.kva + ' kVA ' + w.fasa : ''].filter(Boolean).join(' · ')) + '</div>' +
       '<div class="tags"><span class="tag ' + st[1] + '">' + st[0] + '</span>' + (w.tanggal !== t ? '<span class="tag">' + esc(tglTampil(w.tanggal)) + '</span>' : '') +
-      (draf && !q ? '<span class="tag tag-jalan">Draf tersimpan</span>' : '') + '</div></button>';
-  }).join('');
+      (draf && !q && sg !== 'WREVIEW' ? '<span class="tag tag-jalan">Draf tersimpan</span>' : '') + '</div></button>';
+  }).join('') + '<p class="catatan">' + info + '</p>';
+}
+
+/** Status WO gardu di HP: dari server + antrean (mulai / hasil yang belum terkirim). */
+var LABEL_ST_GARDU = { WINSP: 'Menunggu inspeksi', INPRG: 'Sedang inspeksi', WREVIEW: 'Menunggu review', DONE: 'Selesai' };
+function statusGarduHp(w) {
+  var q = antreGardu(w.id);
+  if (q) return q.status === 'ditolak' ? 'TOLAK' : 'KIRIM';
+  var m = S.antrean.filter(function (x) { return x.aksi === 'mulaiWoGardu' && x.muatan && x.muatan.id === w.id && x.status !== 'ditolak'; })[0];
+  return m && w.status === 'WINSP' ? 'INPRG' : (w.status || 'WINSP');
 }
 
 function drafGarduBaru() { return { waktu: '', bersih: '', kunci: '', trafo: '', phbtr: '', jml: 1, jur: {}, v: {}, foto: {}, catatan: '' }; }
@@ -898,7 +928,37 @@ function ambilIsianGardu(w, f) {
 function gambarFormGardu(isi) {
   var w = cariWoGardu(S.woGardu), q = w && antreGardu(w.id);
   if (!w) { S.woGardu = null; gambarInspeksiWo(isi); return; }
+  var sg = statusGarduHp(w);
+  var kepalaWo = '<button class="tombol-kembali" type="button" id="g-kembali">‹ Daftar WO inspeksi</button>' +
+    '<h1>Inspeksi gardu ' + esc(w.kode || '') + '</h1><p class="sub">' + esc(w.id + ' · ' + w.penyulang + (w.kva ? ' · ' + w.kva + ' kVA ' + w.fasa : '')) + '</p>' + htmlPesan() +
+    '<div class="panel"><div class="wo-kunci"><small>WO ' + esc(w.id) + ' · rencana ' + esc(tglTampil(w.tanggal)) + '</small><dl class="rinci"><dt>Gardu</dt><dd>' + esc((w.kode || '') + ' · ' + w.gardu) + '</dd>' +
+    '<dt>Alamat</dt><dd>' + esc(w.alamat || '—') + '</dd><dt>Petugas</dt><dd>' + esc(w.petugas) + '</dd></dl>' +
+    (w.lat && w.lng ? '<a class="catatan" href="https://www.google.com/maps/dir/?api=1&destination=' + w.lat + ',' + w.lng + '" target="_blank" rel="noopener">Petunjuk arah ke gardu ›</a>' : '') + '</div>';
+  var kembali = function () { $('#g-kembali').onclick = function () { S.woGardu = null; S.pesan = null; gambar(); window.scrollTo(0, 0); }; };
+  if (sg === 'WREVIEW' || sg === 'KIRIM') {
+    isi.innerHTML = kepalaWo + '<div class="pesan pesan-info">' + (sg === 'KIRIM' ? 'Hasil inspeksi tersimpan di HP dan menunggu dikirim (tab Antrean).' :
+      'Hasil inspeksi sudah terkirim' + (w.diinspeksi ? ' (' + esc(w.diinspeksi) + ')' : '') + ' dan <b>menunggu review pegawai</b> (WREVIEW). Bila dikembalikan, WO muncul lagi dengan catatan perbaikan.') + '</div></div>';
+    kembali(); return;
+  }
+  if (sg === 'WINSP') {
+    isi.innerHTML = kepalaWo + '<p class="catatan" style="margin:10px 0">Status <b>WINSP</b> (menunggu inspeksi). Tekan <b>Mulai inspeksi</b> saat tiba di gardu — status berubah menjadi <b>INPRG</b>, lalu form inspeksi & pengukuran terbuka.</p>' +
+      '<button class="tombol-utama" type="button" id="g-mulai">Mulai inspeksi</button></div>';
+    kembali();
+    $('#g-mulai').onclick = function () {
+      var tb = this; tb.disabled = true; tb.textContent = 'Mencari lokasi…';
+      lokasiHp(10000).then(async function (l) {
+        var d = new Date(), wkt = hariIni() + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+        var item = { idAntre: 'GDM-' + w.id, aksi: 'mulaiWoGardu', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
+          ringkasan: { judul: 'Mulai inspeksi gardu ' + (w.kode || w.gardu), sub: w.id + ' · ' + wkt, tanggal: hariIni() },
+          muatan: { id: w.id, waktu: wkt, koordinat: l ? l.koordinat : '' } };
+        try { await DB.simpan(item); } catch (err) { toast('Gagal menyimpan di HP: ' + err.message); tb.disabled = false; tb.textContent = 'Mulai inspeksi'; return; }
+        await muatAntrean(); S.pesan = { jenis: 'ok', teks: 'Inspeksi dimulai (INPRG). Isi form di bawah.' }; gambar(); window.scrollTo(0, 0); kirimAntrean();
+      });
+    };
+    return;
+  }
   var F = infoGardu().form || {}, at = infoGardu().aturan || { vMin: 198, vMax: 231, vNominal: 220 };
+  if (!S.drafGardu[w.id] && w.catatanReview && S.drafGarduKirim[w.id]) { S.drafGardu[w.id] = JSON.parse(JSON.stringify(S.drafGarduKirim[w.id])); S.drafGardu[w.id].dariKirim = true; simpanDrafGardu(); }
   var f = S.drafGardu[w.id] = S.drafGardu[w.id] || drafGarduBaru();
   if (!f.waktu) { var d = new Date(); f.waktu = hariIni() + 'T' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
   var opsi = function (daftar, pilih) { return '<option value="">—</option>' + (daftar || []).map(function (v) { return '<option' + (v === pilih ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join(''); };
@@ -921,6 +981,8 @@ function gambarFormGardu(isi) {
   };
   isi.innerHTML = '<button class="tombol-kembali" type="button" id="g-kembali">‹ Daftar WO inspeksi</button>' +
     '<h1>Inspeksi gardu ' + esc(w.kode || '') + '</h1><p class="sub">' + esc(w.id + ' · ' + w.penyulang + (w.kva ? ' · ' + w.kva + ' kVA ' + w.fasa : '')) + '</p>' + htmlPesan() +
+    (w.catatanReview ? '<div class="pesan pesan-galat"><b>Dikembalikan reviewer:</b> ' + esc(w.catatanReview) + (/[.!?]$/.test(w.catatanReview) ? ' ' : '. ') +
+      (f.dariKirim ? 'Isian & foto terakhir yang dikirim sudah dimuat ulang — perbaiki bagian yang diminta lalu simpan lagi.' : 'Perbaiki lalu simpan lagi.') + '</div>' : '') +
     (q ? '<div class="pesan pesan-' + (q.status === 'ditolak' ? 'galat' : 'info') + '">' + (q.status === 'ditolak' ? 'Hasil ini ditolak server: ' + esc(q.pesan) + ' Perbaiki lalu simpan lagi.' : 'Hasil WO ini sudah tersimpan di HP dan menunggu dikirim. Menyimpan lagi akan mengganti data di antrean.') + '</div>' : '') +
     '<form id="f-gardu" class="panel" novalidate>' +
     '<div class="wo-kunci"><small>WO ' + esc(w.id) + ' · rencana ' + esc(tglTampil(w.tanggal)) + '</small><dl class="rinci"><dt>Gardu</dt><dd>' + esc((w.kode || '') + ' · ' + w.gardu) + '</dd>' +
@@ -1005,7 +1067,8 @@ function pasangFormGardu(w, f) {
     try { await DB.simpan(item); } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }
     delete S.drafGardu[w.id]; simpanDrafGardu();
     S.woGardu = null; await muatAntrean();
-    S.pesan = { jenis: 'ok', teks: navigator.onLine ? 'Hasil inspeksi gardu tersimpan dan sedang dikirim (foto diunggah satu per satu).' : 'Hasil inspeksi gardu tersimpan di HP. Akan dikirim otomatis saat ada sinyal.' };
+    S.pesan = { jenis: 'ok', teks: (navigator.onLine ? 'Hasil inspeksi gardu tersimpan dan sedang dikirim (foto diunggah satu per satu).' : 'Hasil inspeksi gardu tersimpan di HP. Akan dikirim otomatis saat ada sinyal.') +
+      ' Setelah terkirim, status menjadi WREVIEW (menunggu review pegawai).' };
     gambar(); window.scrollTo(0, 0);
     kirimAntrean();
   };
@@ -2066,6 +2129,7 @@ async function mulai() {
     if (lama) DB.taruh('drafRow', null).catch(function () {});
   } catch (e) { /* abaikan */ }
   try { S.drafGardu = (await DB.ambil('drafGardu')) || {}; } catch (e) { S.drafGardu = {}; }
+  try { S.drafGarduKirim = (await DB.ambil('drafGarduKirim')) || {}; } catch (e) { S.drafGarduKirim = {}; }
   S.drafRow = drafRowBaru();
   S.wo = bacaLokal(KUNCI.wo);
   await muatAntrean();
@@ -2076,7 +2140,11 @@ async function mulai() {
   window.addEventListener('online', function () { gambar(); muatData(true); kirimAntrean(); });
   window.addEventListener('offline', function () { gambar(); });
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'visible') { kirimAntrean(); }
+    if (document.visibilityState === 'visible') {
+      kirimAntrean();
+      var umur = S.data && S.data.diambil ? Date.now() - new Date(S.data.diambil).getTime() : Infinity;
+      if (navigator.onLine && S.sesi && !S.sesi.habis && !(umur < 120000)) muatData(true);
+    }
     else simpanDrafSekarang();
   });
   setInterval(function () { if (document.visibilityState === 'visible') kirimAntrean(); }, 60000);
