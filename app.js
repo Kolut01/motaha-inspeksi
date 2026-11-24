@@ -6,7 +6,7 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-18.4';
+var VERSI_PWA = '2026-10-18.5';
 var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
@@ -511,7 +511,7 @@ function drafBaru(lama) {
   var py = (S.sesi && S.sesi.pengguna) || {};
   return {
     tanggal: hariIni(), penyulang: lama ? lama.penyulang : '', section: '', sectionManual: false,
-    jenis: '', rencana: '', material: '', koordinat: '', keterangan: '', status: '',
+    jenis: '', tindakan: '', izin: '', rencana: '', material: '', koordinat: '', keterangan: '', status: '',
     petugasInspeksi: namaLogin(), petugasEksekusi: namaLogin(), tanggalEksekusi: hariIni(),
     fotoTemuan: null, fotoEksekusi: null, idRencana: ''
   };
@@ -536,9 +536,24 @@ function ambilIsian() {
     f.section = f.sectionManual ? (nilai('i-sec-lain') || '') : sec;
   }
   f.jenis = radio('i-jenis'); f.rencana = radio('i-rencana'); f.material = radio('i-material'); f.status = radio('i-status');
+  f.tindakan = radio('i-tindakan'); f.izin = radio('i-izin');
   f.koordinat = nilai('i-koor') || ''; f.keterangan = nilai('i-ket') || ''; f.petugasInspeksi = namaLogin();
   if (document.getElementById('i-pe')) { f.petugasEksekusi = namaLogin(); f.tanggalEksekusi = nilai('i-tgl-eks'); }
   return f;
+}
+
+/* Isian lanjutan per jenis temuan: ROW → Pemangkasan/Penebangan + izin pemilik; Konstruksi & Material/Peralatan → Perbaikan/Penggantian.
+ * Pilihan dari server (pilihan.tindakan / pilihan.izin); cadangan bawaan bila script server masih versi lama. */
+var TINDAKAN_BAWAAN = { 'ROW': ['Pemangkasan', 'Penebangan'], 'Konstruksi': ['Perbaikan', 'Penggantian'], 'Material/Peralatan': ['Perbaikan', 'Penggantian'] };
+var IZIN_BAWAAN = ['Sudah Diizinkan', 'Belum Diizinkan'];
+function opsiTindakan(jenis) { var p = (S.data && S.data.pilihan) || {}; return (p.tindakan || TINDAKAN_BAWAAN)[jenis] || []; }
+function opsiIzin() { var p = (S.data && S.data.pilihan) || {}; return p.izin || IZIN_BAWAAN; }
+function htmlTindakan(f) {
+  var t = opsiTindakan(f.jenis);
+  if (!t.length) return '';
+  return '<div class="blok-tindakan">' +
+    '<div class="medan"><span class="label">' + (f.jenis === 'ROW' ? 'Pemangkasan / penebangan' : 'Perbaikan / penggantian') + ' <span class="wajib">*</span></span>' + radio('i-tindakan', t, f.tindakan) + '</div>' +
+    (f.jenis === 'ROW' ? '<div class="medan"><span class="label">Izin pemilik <span class="wajib">*</span></span>' + radio('i-izin', opsiIzin(), f.izin) + '</div>' : '') + '</div>';
 }
 
 function radio(nama, daftar, pilih) {
@@ -572,6 +587,7 @@ function gambarInput(isi) {
     (f.penyulang ? opsi('__lain', manual ? '__lain' : '', 'Lainnya (ketik manual)…') : '') + '</select>' +
     (manual && f.penyulang ? '<input id="i-sec-lain" type="text" value="' + esc(f.section) + '" placeholder="Ketik nama section / segmen">' : '') + '</div>') +
     '<div class="medan"><span class="label">Jenis temuan <span class="wajib">*</span></span>' + radio('i-jenis', p.jenis, f.jenis) + '</div>' +
+    htmlTindakan(f) +
     '<div class="medan"><span class="label">Rencana tindak lanjut <span class="wajib">*</span></span>' + radio('i-rencana', p.rencana, f.rencana) + '</div>' +
     '<div class="medan"><span class="label">Kebutuhan material <span class="wajib">*</span></span>' + radio('i-material', p.material, f.material) + '</div>' +
     htmlFoto('i-foto', 'Foto temuan', true, f.fotoTemuan) +
@@ -602,6 +618,9 @@ function pasangInput() {
     if (lain && $('#i-sec-lain')) $('#i-sec-lain').focus();
   };
   Array.prototype.forEach.call(document.querySelectorAll('input[name="i-status"]'), function (el) { el.onchange = ulang; });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="i-jenis"]'), function (el) {
+    el.onchange = function () { ambilIsian(); if (opsiTindakan(f.jenis).indexOf(f.tindakan) === -1) f.tindakan = ''; if (f.jenis !== 'ROW') f.izin = ''; simpanDrafSekarang(); gambar(); };
+  });
   pasangFoto('i-foto', function (foto) {
     ambilIsian(); f.fotoTemuan = foto;
     if (foto.koordinat && !f.koordinat) { f.koordinat = foto.koordinat; toast(foto.sumberKoordinat === 'foto' ? 'Koordinat diisi dari lokasi foto.' : 'Koordinat diisi dari GPS HP.'); }
@@ -625,7 +644,10 @@ function pasangInput() {
     var p = S.data.pilihan, sudah = f.status === p.status[1];
     var salah = !f.tanggal ? 'Tanggal inspeksi wajib diisi.' : f.tanggal > hariIni() ? 'Tanggal inspeksi tidak boleh di masa depan.' :
       !f.penyulang ? 'Pilih nama penyulang.' : !f.section ? 'Nama section/segmen wajib diisi.' :
-      !f.jenis ? 'Pilih jenis temuan.' : !f.rencana ? 'Pilih rencana tindak lanjut.' : !f.material ? 'Pilih kebutuhan material.' :
+      !f.jenis ? 'Pilih jenis temuan.' :
+      opsiTindakan(f.jenis).length && !f.tindakan ? 'Pilih ' + opsiTindakan(f.jenis).join(' / ').toLowerCase() + '.' :
+      f.jenis === 'ROW' && !f.izin ? 'Pilih izin pemilik: sudah / belum diizinkan.' :
+      !f.rencana ? 'Pilih rencana tindak lanjut.' : !f.material ? 'Pilih kebutuhan material.' :
       !f.fotoTemuan ? 'Foto temuan wajib dilampirkan.' : f.koordinat && !koordinatSah(f.koordinat) ? 'Titik koordinat tidak sah (contoh: -3.123456, 121.123456).' :
       !namaLogin() ? 'Nama akun tidak terbaca — keluar lalu masuk lagi.' : !f.status ? 'Pilih status temuan.' :
       sudah && !f.fotoEksekusi ? 'Foto setelah eksekusi wajib dilampirkan.' : sudah && !namaLogin() ? 'Nama akun tidak terbaca — keluar lalu masuk lagi.' :
@@ -635,9 +657,10 @@ function pasangInput() {
     var idKlien = lama && lama.muatan.tanggal === f.tanggal ? lama.idAntre : 'INS-' + f.tanggal.replace(/-/g, '') + '-' + hex(4);
     var item = {
       idAntre: idKlien, aksi: 'simpanInspeksi', dibuat: lama ? lama.dibuat : new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
-      ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + ' · ' + f.status + (f.idRencana ? ' · WO' : ''), tanggal: f.tanggal },
+      ringkasan: { judul: f.penyulang + ' · ' + f.section, sub: f.jenis + (f.tindakan ? ' (' + f.tindakan + ')' : '') + ' · ' + f.status + (f.idRencana ? ' · WO' : ''), tanggal: f.tanggal },
       muatan: {
         idKlien: idKlien, tanggal: f.tanggal, penyulang: f.penyulang, section: f.section, jenis: f.jenis, rencana: f.rencana, material: f.material,
+        tindakan: f.tindakan || '', izin: f.jenis === 'ROW' ? (f.izin || '') : '',
         koordinat: f.koordinat, keterangan: f.keterangan, status: f.status, petugasInspeksi: namaLogin(),
         fotoTemuan: { mime: f.fotoTemuan.mime, data: f.fotoTemuan.data },
         fotoEksekusi: sudah ? { mime: f.fotoEksekusi.mime, data: f.fotoEksekusi.data } : null,
@@ -1107,6 +1130,7 @@ function daftarTemuan() {
     var m = x.muatan;
     return { 'ID': x.idAntre, 'TANGGAL INSPEKSI': m.tanggal, 'PENYULANG': m.penyulang, 'SECTION/SEGMEN': m.section, 'JENIS TEMUAN': m.jenis,
       'RENCANA TINDAK LANJUT': m.rencana, 'KEBUTUHAN MATERIAL': m.material, 'KOORDINAT': m.koordinat, 'KETERANGAN': m.keterangan,
+      'JENIS TINDAKAN': m.tindakan || '', 'STATUS IZIN': m.izin || '',
       'PETUGAS INSPEKSI': m.petugasInspeksi, 'ID RENCANA': m.idRencana || '', _lokal: true };
   });
   var ada = {}; lokal.forEach(function (x) { ada[x.ID] = true; });
@@ -1176,6 +1200,8 @@ function kartuBelum(x, i) {
     (x['KETERANGAN'] ? '<div class="kartu-ket">' + esc(x['KETERANGAN']) + '</div>' : '') +
     '<div class="tags">' + (tunda ? '<span class="tag tag-tunggu">Eksekusi menunggu kirim</span>' : '<span class="tag tag-belum">Belum eksekusi</span>') +
     '<span class="tag">' + esc(x['JENIS TEMUAN']) + '</span>' +
+    (x['JENIS TINDAKAN'] ? '<span class="tag">' + esc(x['JENIS TINDAKAN']) + '</span>' : '') +
+    (x['STATUS IZIN'] ? '<span class="tag' + (/belum/i.test(x['STATUS IZIN']) ? ' tag-belum' : '') + '">' + esc(x['STATUS IZIN']) + '</span>' : '') +
     (/butuh padam/i.test(x['RENCANA TINDAK LANJUT']) ? '<span class="tag">Butuh padam</span>' : '') +
     (/^butuh material/i.test(x['KEBUTUHAN MATERIAL']) ? '<span class="tag">Butuh material</span>' : '') +
     (x._lokal ? '<span class="tag tag-tunggu">Belum terkirim</span>' : '') + '</div></button>';
@@ -1223,6 +1249,7 @@ function gambarDetail(isi) {
     (x._lokal ? '<span class="tag tag-tunggu">Belum terkirim</span>' : S.detailSelesai ? '<span class="tag tag-sudah">Sudah eksekusi</span>' : '<span class="tag tag-belum">Belum eksekusi</span>') + '</div>' +
     '<h1 style="margin:6px 0 12px">' + esc(x['PENYULANG']) + ' · ' + esc(x['SECTION/SEGMEN']) + '</h1><dl class="rinci">' +
     baris('Tanggal inspeksi', esc(tglTampil(x['TANGGAL INSPEKSI']))) + baris('Jenis temuan', esc(x['JENIS TEMUAN'])) +
+    baris(x['JENIS TEMUAN'] === 'ROW' ? 'Pemangkasan / penebangan' : 'Perbaikan / penggantian', esc(x['JENIS TINDAKAN'] || '')) + baris('Izin pemilik', esc(x['STATUS IZIN'] || '')) +
     baris('Rencana', esc(x['RENCANA TINDAK LANJUT'])) + baris('Material', esc(x['KEBUTUHAN MATERIAL'])) +
     baris('Petugas inspeksi', esc(x['PETUGAS INSPEKSI'])) + baris('Keterangan', esc(x['KETERANGAN'])) +
     baris('Koordinat', x['KOORDINAT'] ? esc(x['KOORDINAT']) + ' · <a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(x['KOORDINAT']) + '">Petunjuk arah ↗</a>' : '') +
@@ -1503,7 +1530,7 @@ function gambarDetailWo(isi, wo) {
       (temuan.length ? temuan.map(function (t) {
         return '<div class="kartu kartu-temuan-row"><div class="kartu-judul">' + esc(tglTampil(t['TANGGAL INSPEKSI'])) + ' · ' + esc(t.ID) + '</div>' +
           (t['KETERANGAN'] ? '<div class="kartu-ket">' + esc(t['KETERANGAN']) + '</div>' : '') +
-          '<div class="kartu-ket">' + esc(t['RENCANA TINDAK LANJUT'] || '') + (t['KOORDINAT'] ? ' · ' + esc(t['KOORDINAT']) : '') + '</div>' +
+          '<div class="kartu-ket">' + esc([t['JENIS TINDAKAN'], t['STATUS IZIN'], t['RENCANA TINDAK LANJUT']].filter(Boolean).join(' · ')) + (t['KOORDINAT'] ? ' · ' + esc(t['KOORDINAT']) : '') + '</div>' +
           htmlFotoServer(t._fotoTemuan, 'Foto temuan') +
           (function () {
             var df = drafTemuan(wo.ID, t.ID), ada = drafBerisi(df);
