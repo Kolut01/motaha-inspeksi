@@ -6,7 +6,7 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-18.5';
+var VERSI_PWA = '2026-10-18.7';
 var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
@@ -22,7 +22,7 @@ var S = {
   mengirim: false, memuatData: false, pesan: null, gantiAntre: null, lembar: false, pasang: null,
   cari: '', saringPy: '', terakhirKirim: null, pembaruan: null, tlMode: 'belum', foto: {},
   dataRow: null, drafRow: null, drafRows: [], pesanRow: '', absenForm: null, wo: null, formRow: false, detailReal: null, saringRegu: '',
-  woIns: null, insForm: false, woForm: null, woGardu: null, drafGardu: {}, drafGarduKirim: {}
+  woIns: null, insForm: false, woForm: null, woGardu: null, drafGardu: {}, drafGarduKirim: {}, drafAset: null
 };
 
 /* ---------- Util ---------- */
@@ -60,6 +60,7 @@ var IKON = {
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   row: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22V12"/><path d="M12 12c-4 0-7-2.5-7-6 3 0 6 1 7 4 1-3 4-4 7-4 0 3.5-3 6-7 6z"/><path d="M4 22h16"/></svg>',
   real: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
+  aset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20"/><path d="M6 6h12"/><path d="M8 10h8"/><path d="M6 6l-2 4M18 6l2 4"/><path d="M9 22h6"/></svg>',
   kamera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="4"/></svg>'
 };
 
@@ -353,7 +354,7 @@ function gambar() {
     '<main id="isi"></main>' +
     '<nav class="nav" aria-label="Menu utama"><div class="nav-isi">' +
     tombolNav('input', 'Inspeksi', IKON.input, 0) + tombolNav('tl', 'Tindak lanjut', IKON.tl, 0) + tombolNav('row', 'ROW', IKON.row, 0) +
-    tombolNav('real', 'Realisasi ROW', IKON.real, 0) +
+    tombolNav('real', 'Realisasi ROW', IKON.real, 0) + tombolNav('aset', 'Aset', IKON.aset, 0) +
     tombolNav('antre', 'Antrean', IKON.antre, jumlah) + '</div></nav>' +
     (S.lembar ? htmlMenu() : '');
   $('#buka-menu').onclick = function () { S.lembar = true; gambar(); };
@@ -375,6 +376,7 @@ function gambar() {
   else if (S.tab === 'tl') gambarTindakLanjut(isi);
   else if (S.tab === 'row') gambarRowHp(isi);
   else if (S.tab === 'real') gambarRealisasiHp(isi);
+  else if (S.tab === 'aset') gambarAset(isi);
   else gambarAntrean(isi);
 }
 
@@ -678,6 +680,142 @@ function pasangInput() {
     await muatAntrean();
     S.pesan = { jenis: 'ok', teks: (navigator.onLine ? 'Temuan tersimpan dan sedang dikirim.' : 'Temuan tersimpan di HP. Akan dikirim otomatis saat ada sinyal.') +
       (dariWo ? ' Tambah temuan lain atau tekan Selesai inspeksi bila sudah selesai.' : '') };
+    gambar(); window.scrollTo(0, 0);
+    kirimAntrean();
+  };
+}
+
+/* ---------- Pendataan Aset Jaringan (tiang JTM) ----------
+ * Satu form = satu tiang. Pilihan dari server (S.data.aset); cadangan bawaan bila script server masih versi lama.
+ * Jumlah sirkit menentukan berapa blok sirkit (1–3) yang muncul. Tersimpan di HP dulu, lalu dikirim lewat antrean.
+ */
+var ASET_BAWAAN = {
+  jenisTiang: ['Beton', 'Besi'], tinggi: ['7 m', '9 m', '11 m', '12 m', '13 m'], sirkit: ['Single Sirkit', 'Double Sirkit', 'Triple Sirkit'],
+  kabel: ['A3C', 'A3CS'], besar: ['35 mm²', '50 mm²', '70 mm²', '150 mm²', '240 mm²'], fasa: ['1P', '3P'],
+  konstruksi: ['Tumpu Tunggal (T1)', 'Tumpu Ganda (T2)', 'Double Aspan (A2)', 'Tumpu Tunggal+Aspan (T1+A1)', 'Aspan Ganda+Aspan (A2+A1)', 'Tumpu Ganda+Aspan (T2+A1)'],
+  peralatan: ['Gardu', 'LBS Manual', 'SECT', 'REC'], kondisi: ['Baik', 'Baik, Tiang Miring', 'Ada Retak Rambut', 'Retak Parah']
+};
+function opsiAset() { return Object.assign({}, ASET_BAWAAN, (S.data && S.data.aset) || {}); }
+function drafAsetBaru(lama) {
+  // Tiang berikutnya menyalin isian tiang sebelumnya (jenis, tinggi, sirkit, kabel, konstruksi, penyulang, peralatan, kondisi);
+  // petugas cukup mengecek & menyesuaikan, lalu mengambil foto dan koordinat baru.
+  if (lama && lama.jenisTiang) {
+    return { jenisTiang: lama.jenisTiang, tinggi: lama.tinggi, sirkit: lama.sirkit,
+      sirkitData: [0, 1, 2].map(function (i) { return Object.assign({}, (lama.sirkitData || [])[i] || {}); }),
+      peralatan: (lama.peralatan || []).slice(), kondisi: lama.kondisi, koordinat: '', fotoAtas: null, fotoBawah: null, keterangan: '', salinan: true };
+  }
+  return { jenisTiang: '', tinggi: '', sirkit: '', sirkitData: [{ kabel: '', besar: '', fasa: '', konstruksi: '', penyulang: '' }, {}, {}],
+    peralatan: [], kondisi: '', koordinat: '', fotoAtas: null, fotoBawah: null, keterangan: '' };
+}
+function jumlahSirkitAset(f) { return Math.max(0, opsiAset().sirkit.indexOf(f.sirkit) + 1); }
+function simpanDrafAset() { DB.taruh('drafAset', S.drafAset).catch(function () {}); }
+function ambilIsianAset() {
+  var f = S.drafAset, rd = function (n) { var el = document.querySelector('input[name="' + n + '"]:checked'); return el ? el.value : ''; };
+  if (!$('#f-aset')) return;
+  f.jenisTiang = rd('a-jenis'); f.tinggi = rd('a-tinggi'); f.sirkit = rd('a-sirkit'); f.kondisi = rd('a-kondisi');
+  for (var i = 0; i < 3; i++) {
+    if (!$('#a-s' + i + '-py')) continue;
+    var x = f.sirkitData[i] = f.sirkitData[i] || {};
+    x.kabel = rd('a-s' + i + '-kabel'); x.besar = rd('a-s' + i + '-besar'); x.fasa = rd('a-s' + i + '-fasa');
+    x.konstruksi = $('#a-s' + i + '-kons').value; x.penyulang = $('#a-s' + i + '-py').value;
+  }
+  f.peralatan = Array.prototype.map.call(document.querySelectorAll('input[name="a-alat"]:checked'), function (el) { return el.value; });
+  f.koordinat = $('#a-koor').value.trim(); f.keterangan = $('#a-ket').value;
+}
+function gambarAset(isi) {
+  if (!S.drafAset) S.drafAset = drafAsetBaru();
+  var f = S.drafAset, o = opsiAset(), n = jumlahSirkitAset(f), m = (S.data && S.data.master) || { penyulang: [] };
+  var opsi = function (v, pilih, label) { return '<option value="' + esc(v) + '"' + (v === pilih ? ' selected' : '') + '>' + esc(label || v) + '</option>'; };
+  var blokSirkit = function (i) {
+    var x = f.sirkitData[i] || {}, py = m.penyulang.slice(); if (x.penyulang && py.indexOf(x.penyulang) === -1) py.push(x.penyulang);
+    return '<fieldset class="blok-sirkit"><legend>Sirkit ' + (i + 1) + '</legend>' +
+      '<div class="medan"><span class="label">Jenis kabel <span class="wajib">*</span></span>' + radio('a-s' + i + '-kabel', o.kabel, x.kabel) + '</div>' +
+      '<div class="medan"><span class="label">Besar kabel <span class="wajib">*</span></span>' + radio('a-s' + i + '-besar', o.besar, x.besar) + '</div>' +
+      '<div class="medan"><span class="label">Jumlah fasa <span class="wajib">*</span></span>' + radio('a-s' + i + '-fasa', o.fasa, x.fasa) + '</div>' +
+      '<div class="medan"><label for="a-s' + i + '-kons">Jenis konstruksi <span class="wajib">*</span></label><select id="a-s' + i + '-kons">' +
+        opsi('', x.konstruksi, '— Pilih konstruksi —') + o.konstruksi.map(function (v) { return opsi(v, x.konstruksi); }).join('') + '</select></div>' +
+      '<div class="medan"><label for="a-s' + i + '-py">Nama penyulang <span class="wajib">*</span></label><select id="a-s' + i + '-py">' +
+        opsi('', x.penyulang, '— Pilih penyulang —') + py.map(function (v) { return opsi(v, x.penyulang); }).join('') + '</select></div></fieldset>';
+  };
+  var saya = (S.data && S.data.asetSaya) || null;
+  var antre = S.antrean.filter(function (x) { return x.aksi === 'simpanAsetJaringan'; });
+  isi.innerHTML = '<h1>Pendataan Aset Jaringan</h1>' +
+    '<p class="sub">Satu form untuk satu tiang. Tersimpan di HP dulu, lalu terkirim otomatis saat ada sinyal. <span class="wajib">*</span> wajib diisi.</p>' +
+    (saya || antre.length ? '<div class="ringkas-aset"><div><b>' + ((saya ? saya.hariIni : 0) + antre.length) + '</b><small>tiang hari ini</small></div>' +
+      '<div><b>' + ((saya ? saya.total : 0) + antre.length) + '</b><small>total oleh Anda</small></div>' +
+      (antre.length ? '<div><b>' + antre.length + '</b><small>menunggu terkirim</small></div>' : '') + '</div>' : '') +
+    htmlPesan() +
+    (f.salinan ? '<div class="pesan pesan-info">Isian disalin dari tiang sebelumnya — <b>periksa kembali</b> dan sesuaikan bila berbeda, lalu ambil <b>foto atas, foto bawah, dan koordinat</b> tiang ini.</div>' : '') +
+    '<form id="f-aset" class="panel" novalidate>' +
+    '<h2 class="judul-blok">Tiang</h2>' +
+    '<div class="medan"><span class="label">Jenis tiang <span class="wajib">*</span></span>' + radio('a-jenis', o.jenisTiang, f.jenisTiang) + '</div>' +
+    '<div class="medan"><span class="label">Tinggi tiang <span class="wajib">*</span></span>' + radio('a-tinggi', o.tinggi, f.tinggi) + '</div>' +
+    '<div class="medan"><span class="label">Jumlah sirkit <span class="wajib">*</span></span>' + radio('a-sirkit', o.sirkit, f.sirkit) + '</div>' +
+    (n ? [0, 1, 2].slice(0, n).map(blokSirkit).join('') : '<p class="catatan">Pilih jumlah sirkit untuk mengisi data kabel, konstruksi, dan penyulang.</p>') +
+    '<h2 class="judul-blok">Informasi tambahan</h2>' +
+    '<div class="medan"><span class="label">Ada Gardu / LBS Manual / SECT / REC</span><div class="pilih-segmen pilih-cek">' + o.peralatan.map(function (v) {
+      return '<label><input type="checkbox" name="a-alat" value="' + esc(v) + '"' + (f.peralatan.indexOf(v) !== -1 ? ' checked' : '') + '><span>' + esc(v) + '</span></label>'; }).join('') + '</div>' +
+      '<p class="catatan">Centang yang terpasang di tiang ini; kosongkan bila tidak ada.</p></div>' +
+    '<div class="medan"><span class="label">Kondisi tiang <span class="wajib">*</span></span>' + radio('a-kondisi', o.kondisi, f.kondisi) + '</div>' +
+    htmlFoto('a-foto-atas', 'Foto tiang (atas)', true, f.fotoAtas) +
+    htmlFoto('a-foto-bawah', 'Foto tiang (bawah)', true, f.fotoBawah) +
+    '<div class="medan"><label for="a-koor">Titik koordinat <span class="wajib">*</span></label><div class="baris-isian"><input id="a-koor" type="text" inputmode="decimal" value="' + esc(f.koordinat) + '" placeholder="-3.123456, 121.123456">' +
+    '<button class="tombol" type="button" id="a-gps">Lokasi saya</button></div><p class="catatan">Terisi otomatis dari foto bila kamera menyimpan lokasi.</p></div>' +
+    '<div class="medan"><label for="a-ket">Keterangan</label><textarea id="a-ket" placeholder="Catatan tambahan (opsional)">' + esc(f.keterangan) + '</textarea></div>' +
+    '<button class="tombol-utama" type="submit">Simpan data tiang</button>' +
+    '<button class="tombol tombol-kecil" type="button" id="a-kosong" style="width:100%;margin-top:8px">Kosongkan form</button></form>' +
+    (saya && saya.terakhir && saya.terakhir.length ? '<h2 class="judul-blok">Terakhir terkirim</h2><div class="panel daftar-aset">' + saya.terakhir.map(function (t) {
+      return '<div class="kartu-aset"><b>' + esc(t.penyulang) + '</b> · ' + esc(t.tiang) + '<small>' + esc(t.sirkit) + ' · ' + esc(t.kondisi) + ' · ' + esc(jamTampil(String(t.waktu).replace(' ', 'T'))) + '</small></div>'; }).join('') + '</div>' : '');
+  pasangAset();
+}
+function pasangAset() {
+  var f = S.drafAset, ulang = function () { ambilIsianAset(); simpanDrafAset(); gambar(); };
+  var form = $('#f-aset');
+  form.addEventListener('change', function () { ambilIsianAset(); simpanDrafAset(); });
+  form.addEventListener('input', function () { clearTimeout(tundaDraf); tundaDraf = setTimeout(function () { ambilIsianAset(); simpanDrafAset(); }, 400); });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="a-sirkit"]'), function (el) {
+    el.onchange = function () {
+      ambilIsianAset();
+      // Sirkit tambahan mewarisi penyulang sirkit 1 sebagai titik awal.
+      for (var i = 1; i < jumlahSirkitAset(f); i++) { f.sirkitData[i] = f.sirkitData[i] || {}; if (!f.sirkitData[i].penyulang && f.sirkitData[0]) f.sirkitData[i].penyulang = f.sirkitData[0].penyulang; }
+      simpanDrafAset(); gambar();
+    };
+  });
+  var pakaiFoto = function (kunci) {
+    return function (foto) {
+      ambilIsianAset(); f[kunci] = foto;
+      if (foto.koordinat && !f.koordinat) { f.koordinat = foto.koordinat; toast(foto.sumberKoordinat === 'foto' ? 'Koordinat diisi dari lokasi foto.' : 'Koordinat diisi dari GPS HP.'); }
+      else toast('Foto siap (' + foto.kb + ' KB).');
+      simpanDrafAset(); gambar();
+    };
+  };
+  var pyCap = function () { var x = f.sirkitData[0] || {}; return x.penyulang ? 'Penyulang ' + x.penyulang : ''; };
+  pasangFoto('a-foto-atas', pakaiFoto('fotoAtas'), 'MOTAHA Aset Jaringan · Foto tiang (atas)', pyCap());
+  pasangFoto('a-foto-bawah', pakaiFoto('fotoBawah'), 'MOTAHA Aset Jaringan · Foto tiang (bawah)', pyCap());
+  $('#a-gps').onclick = function () { ambilLokasi(function (k, akurasi) { ambilIsianAset(); f.koordinat = k; simpanDrafAset(); gambar(); toast('Lokasi didapat (±' + akurasi + ' m).'); }); };
+  $('#a-kosong').onclick = function () { if (!confirm('Kosongkan semua isian form?')) return; S.drafAset = drafAsetBaru(null); simpanDrafAset(); gambar(); };
+  form.onsubmit = async function (e) {
+    e.preventDefault(); ambilIsianAset();
+    var n = jumlahSirkitAset(f), salah = !f.jenisTiang ? 'Pilih jenis tiang.' : !f.tinggi ? 'Pilih tinggi tiang.' : !n ? 'Pilih jumlah sirkit.' : '';
+    for (var i = 0; i < n && !salah; i++) {
+      var x = f.sirkitData[i] || {}, t = 'Sirkit ' + (i + 1) + ': ';
+      salah = !x.kabel ? t + 'pilih jenis kabel.' : !x.besar ? t + 'pilih besar kabel.' : !x.fasa ? t + 'pilih jumlah fasa.' : !x.konstruksi ? t + 'pilih jenis konstruksi.' : !x.penyulang ? t + 'pilih nama penyulang.' : '';
+    }
+    if (!salah) salah = !f.kondisi ? 'Pilih kondisi tiang.' : !f.fotoAtas ? 'Foto tiang (atas) wajib.' : !f.fotoBawah ? 'Foto tiang (bawah) wajib.' :
+      !f.koordinat ? 'Titik koordinat wajib diisi — ketuk Lokasi saya.' : !koordinatSah(f.koordinat) ? 'Titik koordinat tidak sah (contoh: -3.123456, 121.123456).' : '';
+    if (salah) { S.pesan = { jenis: 'galat', teks: salah }; gambar(); window.scrollTo(0, 0); return; }
+    var idKlien = 'AST-' + hariIni().replace(/-/g, '') + '-' + hex(4), sd = f.sirkitData.slice(0, n);
+    var item = {
+      idAntre: idKlien, aksi: 'simpanAsetJaringan', dibuat: new Date().toISOString(), status: 'menunggu', pesan: '', percobaan: 0,
+      ringkasan: { judul: 'Tiang ' + f.jenisTiang + ' ' + f.tinggi + ' · ' + sd[0].penyulang, sub: f.sirkit + ' · ' + f.kondisi, tanggal: hariIni() },
+      muatan: { idKlien: idKlien, waktu: waktuLokal(new Date()), jenisTiang: f.jenisTiang, tinggi: f.tinggi, sirkit: f.sirkit, sirkitData: sd,
+        peralatan: f.peralatan, kondisi: f.kondisi, koordinat: f.koordinat, keterangan: f.keterangan,
+        fotoAtas: { mime: f.fotoAtas.mime, data: f.fotoAtas.data }, fotoBawah: { mime: f.fotoBawah.mime, data: f.fotoBawah.data } }
+    };
+    try { await DB.simpan(item); } catch (err) { S.pesan = { jenis: 'galat', teks: 'Gagal menyimpan di HP: ' + err.message }; gambar(); return; }
+    S.drafAset = drafAsetBaru(f); simpanDrafAset();
+    await muatAntrean();
+    S.pesan = { jenis: 'ok', teks: (navigator.onLine ? 'Data tiang tersimpan dan sedang dikirim.' : 'Data tiang tersimpan di HP, dikirim otomatis saat ada sinyal.') + ' Form tiang berikutnya sudah terisi sama — cek, lalu ambil foto & koordinat baru.' };
     gambar(); window.scrollTo(0, 0);
     kirimAntrean();
   };
@@ -2156,6 +2294,7 @@ async function mulai() {
     if (lama) DB.taruh('drafRow', null).catch(function () {});
   } catch (e) { /* abaikan */ }
   try { S.drafGardu = (await DB.ambil('drafGardu')) || {}; } catch (e) { S.drafGardu = {}; }
+  try { S.drafAset = (await DB.ambil('drafAset')) || null; } catch (e) { S.drafAset = null; }
   try { S.drafGarduKirim = (await DB.ambil('drafGarduKirim')) || {}; } catch (e) { S.drafGarduKirim = {}; }
   S.drafRow = drafRowBaru();
   S.wo = bacaLokal(KUNCI.wo);
