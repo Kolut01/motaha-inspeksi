@@ -104,6 +104,17 @@
   .simpan-sandi input { width: 22px; height: 22px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
   .simpan-sandi small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; line-height: 1.4; }
   .baris-isian { display: flex; gap: 8px; }
+  .tombol-peta { width: 100%; margin-top: 8px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+  body.kunci-gulir { overflow: hidden; }
+  .peta-pilih { position: fixed; inset: 0; z-index: 200; background: var(--surface); display: flex; flex-direction: column; }
+  .pp-kepala { background: var(--header); color: var(--header-text); padding: calc(10px + env(safe-area-inset-top)) 16px 10px; display: flex; flex-direction: column; gap: 2px; }
+  .pp-kepala span { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--header-muted); }
+  .pp-peta { position: relative; flex: 1; min-height: 0; } #pp-peta { position: absolute; inset: 0; background: #DDE3EA; }
+  .pp-silang { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; z-index: 500; pointer-events: none; }
+  .pp-silang::before, .pp-silang::after { content: ''; position: absolute; background: #E53935; box-shadow: 0 0 0 1.5px #fff; }
+  .pp-silang::before { left: 50%; top: 0; bottom: 0; width: 3px; margin-left: -1.5px; } .pp-silang::after { top: 50%; left: 0; right: 0; height: 3px; margin-top: -1.5px; }
+  .pp-kaki { padding: 10px 14px calc(12px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); }
+  .pp-kaki .catatan { margin: 0; } .pp-tombol { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .pp-tombol .tombol-utama { grid-column: 1 / -1; }
   .baris-isian > input { flex: 1; min-width: 0; }
 
   .unggah { display: block; border: 1.5px dashed var(--line-strong); border-radius: 14px; background: var(--surface-2); overflow: hidden; }

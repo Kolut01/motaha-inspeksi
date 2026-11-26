@@ -6,7 +6,7 @@
  */
 'use strict';
 
-var VERSI_PWA = '2026-10-18.7';
+var VERSI_PWA = '2026-10-18.9';
 var VERSI_SERVER_MIN = '2026-10-12.10'; // script MOTAHA (Apps Script) paling lama yang punya aksi untuk aplikasi HP (menu ROW)
 // Berjalan sebagai APK (Capacitor)? Berkas aplikasi sudah ada di dalam APK -> tanpa service worker;
 // pembaruan dicek ke rilis GitHub (window.MOTAHA_REPO diisi saat APK dibangun).
@@ -265,16 +265,40 @@ function gambarCap(c, baris) {
   });
 }
 
+/** ArrayBuffer JPEG -> akurasi posisi GPS dalam meter dari EXIF GPSHPositioningError (tag 0x1F), atau null bila tidak ada. */
+function akurasiDariExif(buffer) {
+  try {
+    var v = new DataView(buffer);
+    if (v.getUint16(0) !== 0xFFD8) return null;
+    var p = 2;
+    while (p + 4 < v.byteLength) {
+      var penanda = v.getUint16(p), panjang = v.getUint16(p + 2);
+      if (penanda === 0xFFE1 && v.getUint32(p + 4) === 0x45786966) {
+        var t = p + 10, le = v.getUint16(t) === 0x4949;
+        var u16 = function (o) { return v.getUint16(t + o, le); }, u32 = function (o) { return v.getUint32(t + o, le); };
+        var cariTag = function (ifd, tag) { var n = u16(ifd); for (var i = 0; i < n; i++) { var e = ifd + 2 + i * 12; if (u16(e) === tag) return e; } return -1; };
+        var eGps = cariTag(u32(4), 0x8825); if (eGps < 0) return null;
+        var e = cariTag(u32(eGps + 8), 0x1F); if (e < 0) return null;
+        var o = u32(e + 8), b = u32(o + 4);
+        return b ? Math.round(u32(o) / b) : null;
+      }
+      if ((penanda & 0xFF00) !== 0xFF00) return null;
+      p += 2 + panjang;
+    }
+  } catch (err) { /* abaikan */ }
+  return null;
+}
+
 async function siapkanFoto(berkas, label, lokasi) {
   if (!berkas || !/^image\//.test(berkas.type)) throw new Error('Berkas harus berupa gambar.');
   var dipilih = new Date();
   var mintaLokasi = lokasiHp(12000); // jalan bersamaan dengan membaca foto
   var buf = await bacaBerkas(berkas);
-  var koorExif = koordinatDariExif(buf), waktuExif = waktuDariExif(buf);
+  var koorExif = koordinatDariExif(buf), waktuExif = waktuDariExif(buf), akurasiExif = koorExif ? akurasiDariExif(buf) : null;
   var waktu = waktuExif ? new Date(waktuExif) : dipilih;
   if (isNaN(waktu)) waktu = dipilih;
   var baru = !waktuExif || Math.abs(dipilih - waktu) <= 10 * 60000;
-  var koordinat = koorExif, akurasi = null, sumber = koorExif ? 'foto' : '';
+  var koordinat = koorExif, akurasi = koorExif ? akurasiExif : null, sumber = koorExif ? 'foto' : '';
   if (!koordinat && baru) {
     toast('Mengambil lokasi untuk cap foto…');
     var l = await mintaLokasi;
@@ -292,7 +316,7 @@ async function siapkanFoto(berkas, label, lokasi) {
     { teks: label || 'MOTAHA Inspeksi · ULP Kolaka Utara', warna: '#B9CCDD' }
   ].filter(Boolean));
   var data = c.toDataURL('image/jpeg', 0.82);
-  return { mime: 'image/jpeg', data: data, koordinat: koordinat, sumberKoordinat: sumber, waktu: waktu.toISOString(),
+  return { mime: 'image/jpeg', data: data, koordinat: koordinat, akurasi: akurasi, sumberKoordinat: sumber, waktu: waktu.toISOString(),
     kb: Math.round(data.length * 0.75 / 1024) };
 }
 
@@ -313,14 +337,113 @@ function pasangFoto(id, saatSiap, label, lokasi) {
   };
 }
 
+/* ---------- Koordinat: akurasi GPS wajib ≤ AKURASI_MAKS meter ---------- */
+var AKURASI_MAKS = 10;
+/** Pantau GPS sampai akurasi ≤ AKURASI_MAKS m. Selesai dengan {koordinat, akurasi}; gagal dengan Error (pesan berisi akurasi terbaik). */
+function cariLokasiAkurat(batasMs, saatProses) {
+  return new Promise(function (ok, gagal) {
+    if (!navigator.geolocation) { gagal(new Error('HP ini tidak mendukung lokasi.')); return; }
+    var terbaik = null, selesai = false, id = null, jam = null;
+    var akhiri = function (galat) {
+      if (selesai) return; selesai = true; clearTimeout(jam);
+      if (id !== null) navigator.geolocation.clearWatch(id);
+      if (galat) gagal(galat); else ok(terbaik);
+    };
+    jam = setTimeout(function () {
+      akhiri(new Error(terbaik ? 'Akurasi GPS terbaik ±' + terbaik.akurasi + ' m, belum ≤ ' + AKURASI_MAKS + ' m. Pindah ke tempat terbuka (jauh dari atap/pohon), tunggu sebentar, lalu coba lagi.'
+        : 'Lokasi belum didapat. Pastikan GPS/Lokasi HP aktif dan coba di tempat terbuka.'));
+    }, batasMs);
+    id = navigator.geolocation.watchPosition(function (p) {
+      var a = Math.round(p.coords.accuracy);
+      if (!terbaik || a < terbaik.akurasi) terbaik = { koordinat: p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6), akurasi: a };
+      if (saatProses) saatProses(a, terbaik.akurasi);
+      if (terbaik.akurasi <= AKURASI_MAKS) akhiri(null);
+    }, function (e) {
+      if (e.code === 1) akhiri(new Error('Izin lokasi ditolak. Aktifkan di pengaturan browser/HP.'));
+    }, { enableHighAccuracy: true, timeout: batasMs, maximumAge: 0 });
+  });
+}
+/** Tombol "Lokasi saya": hanya mengisi koordinat bila akurasi ≤ AKURASI_MAKS m (maks. 60 detik mencari). */
 function ambilLokasi(saatDapat) {
-  if (!navigator.geolocation) { toast('HP ini tidak mendukung lokasi.'); return; }
-  toast('Mencari lokasi…');
-  navigator.geolocation.getCurrentPosition(function (p) {
-    saatDapat(p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6), Math.round(p.coords.accuracy));
-  }, function (e) {
-    toast(e.code === 1 ? 'Izin lokasi ditolak. Aktifkan di pengaturan browser.' : 'Lokasi belum didapat. Coba di tempat terbuka.');
-  }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 });
+  if (S.cariLokasi) { toast('Masih mencari lokasi…'); return; }
+  S.cariLokasi = true;
+  toast('Mencari lokasi (target akurasi ≤ ' + AKURASI_MAKS + ' m)…');
+  cariLokasiAkurat(60000, function (a, terbaik) {
+    if (terbaik > AKURASI_MAKS) toast('Menunggu GPS lebih akurat… sekarang ±' + a + ' m (target ≤ ' + AKURASI_MAKS + ' m)');
+  }).then(function (l) { S.cariLokasi = false; saatDapat(l.koordinat, l.akurasi); })
+    .catch(function (e) { S.cariLokasi = false; toast(e.message); });
+}
+/** Koordinat dari foto hanya dipakai untuk mengisi form bila akurasinya diketahui dan ≤ AKURASI_MAKS m. */
+function koordinatFotoLayak(foto) { return !!(foto && foto.koordinat && foto.akurasi !== null && foto.akurasi !== undefined && foto.akurasi <= AKURASI_MAKS); }
+function pesanKoordinatFoto(foto) {
+  if (!foto.koordinat) return 'Foto siap. Koordinat belum didapat — ketuk Lokasi saya.';
+  return 'Foto siap. Koordinat foto tidak dipakai (' + (foto.akurasi === null || foto.akurasi === undefined ? 'akurasi tidak diketahui' : 'akurasi ±' + foto.akurasi + ' m') +
+    ', syarat ≤ ' + AKURASI_MAKS + ' m) — ketuk Lokasi saya.';
+}
+
+/* ---------- Pilih titik koordinat di peta (Leaflet, butuh internet) ---------- */
+var IKON_PETA = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>';
+function muatLeafletHp() {
+  if (window.L && window.L.map) return Promise.resolve(window.L);
+  if (S._janjiLeaflet) return S._janjiLeaflet;
+  S._janjiLeaflet = new Promise(function (ok, gagal) {
+    var css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(css);
+    var js = document.createElement('script'); js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    js.onload = function () { window.L ? ok(window.L) : gagal(new Error('Peta tidak termuat.')); };
+    js.onerror = function () { S._janjiLeaflet = null; js.remove(); gagal(new Error('Peta butuh internet. Coba lagi saat ada sinyal, atau pakai Lokasi saya.')); };
+    document.head.appendChild(js);
+  });
+  return S._janjiLeaflet;
+}
+/** Peta layar penuh: titik dipilih dengan menggeser peta sampai tanda + di tengah tepat di tiang (atau ketuk peta). */
+function pilihDiPeta(awal, acuan, saatPilih) {
+  var latar = document.createElement('div');
+  latar.className = 'peta-pilih'; latar.setAttribute('role', 'dialog'); latar.setAttribute('aria-modal', 'true'); latar.setAttribute('aria-label', 'Pilih titik di peta');
+  latar.innerHTML = '<div class="pp-kepala"><b>Pilih titik tiang</b><span id="pp-koor">Memuat peta…</span></div>' +
+    '<div class="pp-peta"><div id="pp-peta"></div><div class="pp-silang" aria-hidden="true"></div></div>' +
+    '<div class="pp-kaki"><p class="catatan">Geser / perbesar peta sampai tanda <b>+</b> tepat di posisi tiang. Ketuk peta untuk melompat ke titik itu.</p>' +
+    '<div class="pp-tombol"><button class="tombol" type="button" id="pp-batal">Batal</button><button class="tombol" type="button" id="pp-saya">Ke lokasi saya</button>' +
+    '<button class="tombol-utama" type="button" id="pp-pakai" disabled>Pakai titik ini</button></div></div>';
+  document.body.appendChild(latar); document.body.classList.add('kunci-gulir');
+  var peta = null, tutup = function () { if (peta) peta.remove(); latar.remove(); document.body.classList.remove('kunci-gulir'); };
+  latar.querySelector('#pp-batal').onclick = tutup;
+  muatLeafletHp().then(function (L) {
+    if (!document.body.contains(latar)) return;
+    var mulai = koordinatSah(awal) ? awal.split(',').map(Number) : null;
+    if (!mulai) { for (var i = acuan.length - 1; i >= 0 && !mulai; i--) if (koordinatSah(acuan[i].k)) mulai = acuan[i].k.split(',').map(Number); }
+    peta = L.map('pp-peta', { zoomControl: true, attributionControl: true, maxZoom: 21 }).setView(mulai || [-3.3, 121.0], mulai ? 19 : 11);
+    var lapisan = {
+      'Peta': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 21, maxNativeZoom: 19, attribution: '© OpenStreetMap' }),
+      'Satelit': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 21, maxNativeZoom: 19, attribution: 'Citra © Esri' })
+    };
+    var pilihan = S.lapisanPetaAset && lapisan[S.lapisanPetaAset] ? S.lapisanPetaAset : 'Satelit';
+    lapisan[pilihan].addTo(peta); L.control.layers(lapisan, null, { position: 'topright' }).addTo(peta);
+    peta.on('baselayerchange', function (e) { S.lapisanPetaAset = e.name; });
+    acuan.forEach(function (a) {
+      if (!koordinatSah(a.k)) return;
+      L.circleMarker(a.k.split(',').map(Number), { radius: 6, weight: 2, color: '#fff', fillColor: '#F5C518', fillOpacity: 1 }).addTo(peta).bindTooltip(a.teks);
+    });
+    var tulis = function () {
+      var c = peta.getCenter(), t = c.lat.toFixed(6) + ', ' + c.lng.toFixed(6);
+      latar.querySelector('#pp-koor').textContent = t; return t;
+    };
+    peta.on('move', tulis); tulis();
+    peta.on('click', function (e) { peta.panTo(e.latlng); });
+    latar.querySelector('#pp-pakai').disabled = false;
+    latar.querySelector('#pp-pakai').onclick = function () { var t = tulis(); tutup(); saatPilih(t); };
+    var tbSaya = latar.querySelector('#pp-saya');
+    tbSaya.onclick = function () {
+      if (!navigator.geolocation) { toast('HP ini tidak mendukung lokasi.'); return; }
+      tbSaya.disabled = true; toast('Mencari lokasi…');
+      navigator.geolocation.getCurrentPosition(function (p) {
+        tbSaya.disabled = false; if (!peta) return;
+        peta.setView([p.coords.latitude, p.coords.longitude], 19);
+        L.circle([p.coords.latitude, p.coords.longitude], { radius: p.coords.accuracy, weight: 1, color: '#1667B0', fillOpacity: 0.08, interactive: false }).addTo(peta);
+        toast('Posisi Anda ±' + Math.round(p.coords.accuracy) + ' m. Geser peta bila tiang tidak tepat di tanda +.');
+      }, function (e) { tbSaya.disabled = false; toast(e.code === 1 ? 'Izin lokasi ditolak.' : 'Lokasi belum didapat.'); }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 });
+    };
+    setTimeout(function () { if (peta) peta.invalidateSize(); }, 50);
+  }).catch(function (e) { tutup(); toast(e.message); });
 }
 
 /* ---------- Tampilan umum ---------- */
@@ -625,8 +748,8 @@ function pasangInput() {
   });
   pasangFoto('i-foto', function (foto) {
     ambilIsian(); f.fotoTemuan = foto;
-    if (foto.koordinat && !f.koordinat) { f.koordinat = foto.koordinat; toast(foto.sumberKoordinat === 'foto' ? 'Koordinat diisi dari lokasi foto.' : 'Koordinat diisi dari GPS HP.'); }
-    else if (!foto.koordinat) toast('Foto siap. Koordinat belum didapat — isi lewat Lokasi saya.');
+    if (koordinatFotoLayak(foto) && !f.koordinat) { f.koordinat = foto.koordinat; toast('Koordinat diisi dari ' + (foto.sumberKoordinat === 'foto' ? 'lokasi foto' : 'GPS HP') + ' (±' + foto.akurasi + ' m).'); }
+    else if (!f.koordinat) toast(pesanKoordinatFoto(foto));
     else toast('Foto siap (' + foto.kb + ' KB).');
     simpanDraf(); gambar();
   });
@@ -760,7 +883,9 @@ function gambarAset(isi) {
     htmlFoto('a-foto-atas', 'Foto tiang (atas)', true, f.fotoAtas) +
     htmlFoto('a-foto-bawah', 'Foto tiang (bawah)', true, f.fotoBawah) +
     '<div class="medan"><label for="a-koor">Titik koordinat <span class="wajib">*</span></label><div class="baris-isian"><input id="a-koor" type="text" inputmode="decimal" value="' + esc(f.koordinat) + '" placeholder="-3.123456, 121.123456">' +
-    '<button class="tombol" type="button" id="a-gps">Lokasi saya</button></div><p class="catatan">Terisi otomatis dari foto bila kamera menyimpan lokasi.</p></div>' +
+    '<button class="tombol" type="button" id="a-gps">Lokasi saya</button></div>' +
+    '<button class="tombol tombol-peta" type="button" id="a-peta">' + IKON_PETA + ' Pilih di peta</button>' +
+    '<p class="catatan">Lokasi saya: GPS dengan akurasi ≤ ' + AKURASI_MAKS + ' m. Pilih di peta: geser peta sampai tanda + tepat di tiang (butuh internet).</p></div>' +
     '<div class="medan"><label for="a-ket">Keterangan</label><textarea id="a-ket" placeholder="Catatan tambahan (opsional)">' + esc(f.keterangan) + '</textarea></div>' +
     '<button class="tombol-utama" type="submit">Simpan data tiang</button>' +
     '<button class="tombol tombol-kecil" type="button" id="a-kosong" style="width:100%;margin-top:8px">Kosongkan form</button></form>' +
@@ -784,7 +909,8 @@ function pasangAset() {
   var pakaiFoto = function (kunci) {
     return function (foto) {
       ambilIsianAset(); f[kunci] = foto;
-      if (foto.koordinat && !f.koordinat) { f.koordinat = foto.koordinat; toast(foto.sumberKoordinat === 'foto' ? 'Koordinat diisi dari lokasi foto.' : 'Koordinat diisi dari GPS HP.'); }
+      if (koordinatFotoLayak(foto) && !f.koordinat) { f.koordinat = foto.koordinat; toast('Koordinat diisi dari ' + (foto.sumberKoordinat === 'foto' ? 'lokasi foto' : 'GPS HP') + ' (±' + foto.akurasi + ' m).'); }
+      else if (!f.koordinat) toast(pesanKoordinatFoto(foto));
       else toast('Foto siap (' + foto.kb + ' KB).');
       simpanDrafAset(); gambar();
     };
@@ -793,6 +919,15 @@ function pasangAset() {
   pasangFoto('a-foto-atas', pakaiFoto('fotoAtas'), 'MOTAHA Aset Jaringan · Foto tiang (atas)', pyCap());
   pasangFoto('a-foto-bawah', pakaiFoto('fotoBawah'), 'MOTAHA Aset Jaringan · Foto tiang (bawah)', pyCap());
   $('#a-gps').onclick = function () { ambilLokasi(function (k, akurasi) { ambilIsianAset(); f.koordinat = k; simpanDrafAset(); gambar(); toast('Lokasi didapat (±' + akurasi + ' m).'); }); };
+  $('#a-peta').onclick = function () {
+    ambilIsianAset();
+    // Titik acuan: tiang yang masih di antrean HP + tiang terakhir yang sudah terkirim.
+    var acuan = S.antrean.filter(function (x) { return x.aksi === 'simpanAsetJaringan' && x.muatan && x.muatan.koordinat; })
+      .map(function (x) { return { k: x.muatan.koordinat, teks: (x.ringkasan && x.ringkasan.judul) || 'Tiang (antrean)' }; })
+      .concat(((S.data && S.data.asetSaya && S.data.asetSaya.terakhir) || []).filter(function (x) { return x.koordinat; })
+        .map(function (x) { return { k: x.koordinat, teks: x.tiang + ' · ' + x.penyulang + ' · ' + String(x.waktu).slice(0, 16) }; }));
+    pilihDiPeta(f.koordinat, acuan, function (k) { f.koordinat = k; simpanDrafAset(); gambar(); toast('Koordinat diisi dari peta.'); });
+  };
   $('#a-kosong').onclick = function () { if (!confirm('Kosongkan semua isian form?')) return; S.drafAset = drafAsetBaru(null); simpanDrafAset(); gambar(); };
   form.onsubmit = async function (e) {
     e.preventDefault(); ambilIsianAset();
@@ -977,7 +1112,7 @@ function pasangDetailWoIns(wo, s) {
   var lokasi = wo.PENYULANG + ' · ' + wo['SECTION/SEGMEN'];
   pasangFoto('w-foto', function (foto) {
     a.koordinat = $('#w-koor').value.trim(); a.foto = foto;
-    if (foto.koordinat && !a.koordinat) a.koordinat = foto.koordinat;
+    if (koordinatFotoLayak(foto) && !a.koordinat) a.koordinat = foto.koordinat; else if (!a.koordinat) toast(pesanKoordinatFoto(foto));
     gambar();
   }, a.jenis === 'mulai' ? 'MOTAHA Inspeksi · Start' : 'MOTAHA Inspeksi · Finish', lokasi);
   $('#w-koor').oninput = function () { a.koordinat = $('#w-koor').value.trim(); };
@@ -991,9 +1126,10 @@ function pasangDetailWoIns(wo, s) {
     if (tanpa && !a.yakin) { toast('Centang konfirmasi tidak ada temuan.'); return; }
     if (a.jenis === 'mulai' && wo.TANGGAL !== hariIni()) { toast('Start hanya bisa pada tanggal WO.'); return; }
     if (!koordinatSah(a.koordinat)) {
-      toast('Mencari lokasi GPS…');
-      var l = await lokasiHp(20000);
-      if (!l) { S.pesan = { jenis: 'galat', teks: 'Titik koordinat belum didapat. Aktifkan lokasi lalu tekan Lokasi saya.' }; gambar(); return; }
+      toast('Mencari lokasi GPS (akurasi ≤ ' + AKURASI_MAKS + ' m)…');
+      var l = null, galatL = null;
+      try { l = await cariLokasiAkurat(30000); } catch (eL) { galatL = eL; }
+      if (!l) { S.pesan = { jenis: 'galat', teks: 'Titik koordinat belum didapat. ' + (galatL ? galatL.message : '') + ' Lalu tekan Lokasi saya.' }; gambar(); return; }
       a.koordinat = l.koordinat;
     }
     var waktu = waktuLokal(), id = 'WIN-' + waktu.slice(0, 10).replace(/-/g, '') + '-' + hex(4);
@@ -1849,7 +1985,7 @@ function pasangFormRealisasi(wo) {
   pasangFoto('r-f1', function (foto) { ambilIsianRow(); f.fotoSebelum = foto; simpanDrafRow(); gambar(); }, 'MOTAHA ROW · ULP Kolaka Utara', lokasiTeks);
   pasangFoto('r-f2', function (foto) {
     ambilIsianRow(); f.fotoSesudah = foto;
-    if (foto.koordinat) { f.koordinat = foto.koordinat; toast('Koordinat diisi dari foto sesudah.'); }
+    if (koordinatFotoLayak(foto)) { f.koordinat = foto.koordinat; toast('Koordinat diisi dari foto sesudah (±' + foto.akurasi + ' m).'); } else if (!f.koordinat) toast(pesanKoordinatFoto(foto));
     simpanDrafRow(); gambar();
   }, 'MOTAHA ROW · ULP Kolaka Utara', lokasiTeks);
   pasangFoto('r-f3', function (foto) { ambilIsianRow(); f.fotoPengukuran = foto; simpanDrafRow(); gambar(); }, 'MOTAHA ROW · Pengukuran batang', lokasiTeks);
